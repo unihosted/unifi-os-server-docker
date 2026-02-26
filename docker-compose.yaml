@@ -28,6 +28,10 @@ services:
     environment:
       TZ: Europe/Amsterdam
       UOS_SYSTEM_IP: "91.98.78.106"
+      MONGO_HOST: unifi-os-server-mongodb
+      MONGO_PORT: "27017"
+      MONGO_USER: root
+      MONGO_PASS: root
 
   unifi-network-mongodb:
     container_name: unifi-os-server-mongodb
