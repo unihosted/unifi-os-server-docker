@@ -105,8 +105,8 @@ set_property() {
 
 set_property "system_ip" "$UOS_SYSTEM_IP"
 set_property "db.mongo.local" "false"
-set_property "db.mongo.uri" 'mongodb\://root\:root@unifi-network-mongodb\:27017/ace?tls\=false&authSource\=admin'
-set_property "statdb.mongo.uri" 'mongodb\://root\:root@unifi-network-mongodb\:27017/ace_stat?tls\=false&authSource\=admin'
+set_property "db.mongo.uri" 'mongodb\://root\:root@unifi-os-server-mongodb\:27017/ace?tls\=false&authSource\=admin'
+set_property "statdb.mongo.uri" 'mongodb\://root\:root@unifi-os-server-mongodb\:27017/ace_stat?tls\=false&authSource\=admin'
 
 
 
