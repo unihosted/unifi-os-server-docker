@@ -94,8 +94,10 @@ UNIFI_SYSTEM_PROPERTIES="/var/lib/unifi/system.properties"
 
 set_property() {
     local key="$1" value="$2"
+    local escaped_value="${value//\\/\\\\}"
+    escaped_value="${escaped_value//&/\\&}"
     if grep -q "^${key}=" "$UNIFI_SYSTEM_PROPERTIES" 2>/dev/null; then
-        sed -i "s|^${key}=.*|${key}=${value}|" "$UNIFI_SYSTEM_PROPERTIES"
+        sed -i "s|^${key}=.*|${key}=${escaped_value}|" "$UNIFI_SYSTEM_PROPERTIES"
     else
         echo "${key}=${value}" >> "$UNIFI_SYSTEM_PROPERTIES"
     fi
