@@ -108,10 +108,13 @@ MONGO_PORT="${MONGO_PORT:-27017}"
 MONGO_USER="${MONGO_USER:-root}"
 MONGO_PASS="${MONGO_PASS:-root}"
 MONGO_TLS="${MONGO_TLS:-false}"
-MONGO_AUTH_SOURCE="${MONGO_AUTH_SOURCE:-admin}"
+MONGO_AUTH_SOURCE="${MONGO_AUTH_SOURCE-admin}"
 
 MONGO_URI="mongodb\\://${MONGO_USER}\\:${MONGO_PASS}@${MONGO_HOST}\\:${MONGO_PORT}"
-MONGO_PARAMS="tls\\=${MONGO_TLS}&authSource\\=${MONGO_AUTH_SOURCE}"
+MONGO_PARAMS="tls\\=${MONGO_TLS}"
+if [ -n "${MONGO_AUTH_SOURCE}" ]; then
+    MONGO_PARAMS="${MONGO_PARAMS}&authSource\\=${MONGO_AUTH_SOURCE}"
+fi
 
 set_property "system_ip" "$UOS_SYSTEM_IP"
 set_property "db.mongo.local" "false"
