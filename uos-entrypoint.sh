@@ -85,19 +85,36 @@ if [ -f "$SYS_VENDOR" ] && grep -q "Synology Inc." "$SYS_VENDOR"; then
     echo "Synology patches applied!"
 fi
 
-# Set UOS_SYSTEM_IP
-UNIFI_SYSTEM_PROPERTIES="/var/lib/unifi/system.properties"
-if [ -n "${UOS_SYSTEM_IP+1}" ]; then
-    if [ ! -f "$UNIFI_SYSTEM_PROPERTIES" ]; then
-        echo "system_ip=$UOS_SYSTEM_IP" >> "$UNIFI_SYSTEM_PROPERTIES"
-    else
-        if [ ! -z $(grep "^system_ip=.*" "$UNIFI_SYSTEM_PROPERTIES") ]; then
-            sed -i 's/^system_ip=.*/system_ip='"$UOS_SYSTEM_IP"'/' "$UNIFI_SYSTEM_PROPERTIES"
-        else
-            echo "system_ip=$UOS_SYSTEM_IP" >> "$UNIFI_SYSTEM_PROPERTIES"
-        fi
-    fi
+# Set UOS_SYSTEM_IP (required)
+if [ -z "${UOS_SYSTEM_IP}" ]; then
+    echo "ERROR: UOS_SYSTEM_IP is required but not set"
+    exit 1
 fi
+UNIFI_SYSTEM_PROPERTIES="/var/lib/unifi/system.properties"
+
+set_property() {
+    local key="$1" value="$2"
+    if grep -q "^${key}=" "$UNIFI_SYSTEM_PROPERTIES" 2>/dev/null; then
+        sed -i "s|^${key}=.*|${key}=${value}|" "$UNIFI_SYSTEM_PROPERTIES"
+    else
+        echo "${key}=${value}" >> "$UNIFI_SYSTEM_PROPERTIES"
+    fi
+}
+
+set_property "system_ip" "$UOS_SYSTEM_IP"
+set_property "db.mongo.local" "false"
+set_property "db.mongo.uri" 'mongodb\://root\:root@unifi-network-mongodb\:27017/ace?tls\=false&authSource\=admin'
+set_property "statdb.mongo.uri" 'mongodb\://root\:root@unifi-network-mongodb\:27017/ace_stat?tls\=false&authSource\=admin'
+
+
+
+# Remove the duplicate mongo server /usr/bin/mongod
+if [ -f "/usr/bin/mongod" ]; then
+    rm -f /usr/bin/mongod
+fi
+
+
+
 
 # Start systemd
 exec /sbin/init
