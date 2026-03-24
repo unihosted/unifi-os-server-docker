@@ -165,7 +165,7 @@ fi
     fi
 
     if ! grep -q "^host all all 0.0.0.0/0" "$PG_HBA" 2>/dev/null; then
-        echo "host all all 0.0.0.0/0 md5" >> "$PG_HBA"
+        echo "host all all 0.0.0.0/0 trust" >> "$PG_HBA"
     fi
 
     # Wait for systemd to be up, then restart PostgreSQL to pick up listen_addresses
