@@ -13,6 +13,8 @@ services:
       - "3478:3478/udp"
       - "5514:5514/udp"
       - "11443:443"
+      - "127.0.0.1:7443:7443"
+      - "127.0.0.1:5432:5432"
       - "6789:6789"
       - "8080:8080"
       - "8880:8880"
@@ -21,7 +23,7 @@ services:
       - ./volume:/var/lib/uosserver
       - ./volume:/var/lib/unifi
     tmpfs:
-      - /run
+      - /run:exec
       - /run/lock
     depends_on:
       - unifi-network-mongodb
