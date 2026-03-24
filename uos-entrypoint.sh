@@ -123,13 +123,57 @@ set_property "statdb.mongo.uri" "${MONGO_URI}/ace_stat?${MONGO_PARAMS}"
 
 
 
+
+
 # Remove the duplicate mongo server /usr/bin/mongod
 if [ -f "/usr/bin/mongod" ]; then
     rm -f /usr/bin/mongod
 fi
 
+# Inject localhost bypass (port 7443 → controller on 8081, skipping UOS SSO).
+# Runs in background because UOS nginx hasn't started yet at this point.
+(
+    BYPASS_SRC="/root/site-localhost-bypass.conf"
+    CONFIG_DIR="/data/unifi-core/config/http"
+    CONFIG_FILE="${CONFIG_DIR}/site-localhost-bypass.conf"
 
+    while [ ! -d "$CONFIG_DIR" ]; do sleep 5; done
+    while [ ! -f "/data/unifi-core/config/unifi-core.crt" ]; do sleep 5; done
 
+    cp "$BYPASS_SRC" "$CONFIG_FILE"
+
+    # Wait for nginx master process before reloading
+    while ! pidof nginx > /dev/null 2>&1; do sleep 2; done
+    sleep 2
+    nginx -s reload 2>/dev/null || true
+
+    echo "Localhost bypass: injected on port 7443"
+) &
+
+# Expose PostgreSQL on all interfaces so Docker port mapping can reach it.
+# listen_addresses requires a restart (reload is not enough).
+(
+    PG_CONF="/etc/postgresql/14/main/postgresql.conf"
+    PG_HBA="/etc/postgresql/14/main/pg_hba.conf"
+
+    while [ ! -f "$PG_CONF" ]; do sleep 5; done
+
+    if grep -q "^#\?listen_addresses" "$PG_CONF"; then
+        sed -i "s/^#\?listen_addresses.*/listen_addresses = '*'/" "$PG_CONF"
+    else
+        echo "listen_addresses = '*'" >> "$PG_CONF"
+    fi
+
+    if ! grep -q "^host all all 0.0.0.0/0" "$PG_HBA" 2>/dev/null; then
+        echo "host all all 0.0.0.0/0 md5" >> "$PG_HBA"
+    fi
+
+    # Wait for systemd to be up, then restart PostgreSQL to pick up listen_addresses
+    while ! systemctl is-system-running 2>/dev/null | grep -qE "running|degraded"; do sleep 2; done
+    systemctl restart postgresql@14-main 2>/dev/null || systemctl restart postgresql 2>/dev/null || true
+
+    echo "PostgreSQL: exposed on port 5432"
+) &
 
 # Start systemd
 exec /sbin/init
