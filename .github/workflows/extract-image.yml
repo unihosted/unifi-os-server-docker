@@ -26,13 +26,16 @@ on:
 
   push:
     branches: ["main"]
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
     paths:
       - "Dockerfile"
       - "uos-entrypoint.sh"
       - ".github/workflows/extract-image.yml"
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 env:
@@ -52,11 +55,25 @@ jobs:
         run: |
           set -euo pipefail
 
-          # workflow_dispatch inputs are empty on push triggers, so set defaults.
-          INSTALLER_URL="${{ inputs.installer_url || '' }}"
-          [[ -n "$INSTALLER_URL" ]] || INSTALLER_URL="https://fw-download.ubnt.com/data/unifi-os-server/1856-linux-x64-5.0.6-33f4990f-6c68-4e72-9d9c-477496c22450.6-x64"
+          # Extract version from git tag if triggered by tag push
+          GIT_TAG="${GITHUB_REF#refs/tags/v}"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "Triggered by git tag: ${GITHUB_REF}"
+            UOS_SERVER_VERSION_FROM_TAG="${GIT_TAG}"
+          else
+            UOS_SERVER_VERSION_FROM_TAG=""
+          fi
 
-          UOS_SERVER_VERSION="${{ inputs.uos_server_version || '5.0.6' }}"
+          # workflow_dispatch inputs are empty on non-workflow_dispatch triggers, so set defaults.
+          INSTALLER_URL="${{ inputs.installer_url || '' }}"
+          # Default installer URL for version 5.0.6
+          DEFAULT_URL="https://fw-download.ubnt.com/data/unifi-os-server/1856-linux-x64-5.0.6-33f4990f-6c68-4e72-9d9c-477496c22450.6-x64"
+          [[ -n "$INSTALLER_URL" ]] || INSTALLER_URL="$DEFAULT_URL"
+
+          # Use version from git tag if available, otherwise from inputs, otherwise default
+          UOS_SERVER_VERSION="${{ inputs.uos_server_version || '' }}"
+          [[ -n "$UOS_SERVER_VERSION" ]] || UOS_SERVER_VERSION="${UOS_SERVER_VERSION_FROM_TAG:-5.0.6}"
+
           FIRMWARE_PLATFORM="${{ inputs.firmware_platform || 'linux-x64' }}"
           IMAGE_NAME="${{ inputs.image_name || 'unifi-os-server-docker'}}"
           PUSH="${{ inputs.push || 'true' }}"
@@ -72,6 +89,7 @@ jobs:
           echo "push=$PUSH" >> "$GITHUB_OUTPUT"
           echo "ghcr_image=$GHCR_IMAGE" >> "$GITHUB_OUTPUT"
           echo "ghcr_base_image=$GHCR_BASE_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "is_tag_push=$([[ -n \"$UOS_SERVER_VERSION_FROM_TAG\" ]] && echo 'true' || echo 'false')" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies (binwalk + skopeo)
         shell: bash
@@ -174,20 +192,57 @@ jobs:
           GHCR_IMAGE="${{ steps.vars.outputs.ghcr_image }}"
           UOS_SERVER_VERSION="${{ steps.vars.outputs.uos_server_version }}"
           FIRMWARE_PLATFORM="${{ steps.vars.outputs.firmware_platform }}"
+          IS_TAG_PUSH="${{ steps.vars.outputs.is_tag_push }}"
 
-          TAG1="${GHCR_IMAGE}:${UOS_SERVER_VERSION}"
-          TAG2="${GHCR_IMAGE}:latest"
+          # Parse version components for semantic tagging
+          MAJOR=$(echo "$UOS_SERVER_VERSION" | cut -d. -f1)
+          MINOR=$(echo "$UOS_SERVER_VERSION" | cut -d. -f2)
+          PATCH=$(echo "$UOS_SERVER_VERSION" | cut -d. -f3 | cut -d- -f1)
+          IS_PRERELEASE=$([[ "$UOS_SERVER_VERSION" == *-* ]] && echo "true" || echo "false")
+
+          # Build tags list
+          TAGS="-t ${GHCR_IMAGE}:${UOS_SERVER_VERSION}"
+
+          # Only add semantic tags on git tag pushes (not manual runs or main branch pushes)
+          if [[ "$IS_TAG_PUSH" == "true" ]]; then
+            TAGS="${TAGS} -t ${GHCR_IMAGE}:${MAJOR}.${MINOR}"
+            TAGS="${TAGS} -t ${GHCR_IMAGE}:${MAJOR}"
+            # Only tag 'latest' on non-prerelease versions
+            if [[ "$IS_PRERELEASE" == "false" ]]; then
+              TAGS="${TAGS} -t ${GHCR_IMAGE}:latest"
+            fi
+          fi
+
+          echo "Building with tags:"
+          echo "$TAGS" | tr ' ' '\n' | grep -v '^-t$' || true
 
           docker build \
               --build-arg UOS_SERVER_VERSION="${UOS_SERVER_VERSION}" \
               --build-arg FIRMWARE_PLATFORM="${FIRMWARE_PLATFORM}" \
-              -t "${TAG1}" \
-              -t "${TAG2}" \
+              $TAGS \
               .
 
           if [[ "${{ steps.vars.outputs.push }}" == "true" ]]; then
-              docker push "${TAG1}"
-              docker push "${TAG2}"
+            # Push all tags
+            docker push "${GHCR_IMAGE}:${UOS_SERVER_VERSION}"
+            if [[ "$IS_TAG_PUSH" == "true" ]]; then
+              docker push "${GHCR_IMAGE}:${MAJOR}.${MINOR}"
+              docker push "${GHCR_IMAGE}:${MAJOR}"
+              if [[ "$IS_PRERELEASE" == "false" ]]; then
+                docker push "${GHCR_IMAGE}:latest"
+              fi
+            fi
+          fi
+
+          echo ""
+          echo "Published images:"
+          echo "  ${GHCR_IMAGE}:${UOS_SERVER_VERSION}"
+          if [[ "$IS_TAG_PUSH" == "true" ]]; then
+            echo "  ${GHCR_IMAGE}:${MAJOR}.${MINOR}"
+            echo "  ${GHCR_IMAGE}:${MAJOR}"
+            if [[ "$IS_PRERELEASE" == "false" ]]; then
+              echo "  ${GHCR_IMAGE}:latest"
+            fi
           fi
 
       - name: Summary
@@ -196,3 +251,36 @@ jobs:
           echo "Base image: ${{ steps.vars.outputs.ghcr_base_image }}:${{ steps.vars.outputs.uos_server_version }}"
           echo "Final image: ${{ steps.vars.outputs.ghcr_image }}:${{ steps.vars.outputs.uos_server_version }}"
           echo "Push: ${{ steps.vars.outputs.push }}"
+          echo "Is tag push: ${{ steps.vars.outputs.is_tag_push }}"
+
+      - name: Create GitHub Release
+        if: steps.vars.outputs.is_tag_push == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          name: "Release v${{ steps.vars.outputs.uos_server_version }}"
+          body: |
+            ## Docker Images
+
+            ```bash
+            docker pull ${{ steps.vars.outputs.ghcr_image }}:${{ steps.vars.outputs.uos_server_version }}
+            ```
+
+            ### Available Tags
+            - `${{ steps.vars.outputs.uos_server_version }}` - This specific version
+            - `<major>.<minor>` (e.g., `5.0`) - Latest patch in this minor version
+            - `<major>` (e.g., `5`) - Latest in this major version
+            - `latest` - Latest stable release (non-prerelease only)
+
+            ## Quick Start
+
+            ```bash
+            docker run -d \\
+              --name unifi-os-server \\
+              --privileged \\
+              -p 11443:443 \\
+              -e UOS_SYSTEM_IP=your.ip.address \\
+              ${{ steps.vars.outputs.ghcr_image }}:${{ steps.vars.outputs.uos_server_version }}
+            ```
+
+            See [README.md](https://github.com/${{ github.repository }}/blob/main/README.md) for full documentation.
+          generate_release_notes: true
