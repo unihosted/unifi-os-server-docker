@@ -24,17 +24,8 @@ on:
         required: true
         default: "true"
 
+  # Build when a version tag is pushed (e.g., v4.3.6, v5.0.6)
   push:
-    branches:
-      - main
-    paths:
-      - "Dockerfile"
-      - "uos-entrypoint.sh"
-      - "site-localhost-bypass.conf"
-      - ".github/workflows/extract-image.yml"
-      - "versions/**/Dockerfile"
-      - "versions/**/uos-entrypoint.sh"
-      - "versions/**/site-localhost-bypass.conf"
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+-*"
@@ -47,7 +38,7 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  # Determine which versions to build
+  # Determine which version to build based on the tag
   matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -56,39 +47,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Determine versions to build
+      - name: Determine version to build
         id: set-matrix
         shell: bash
         run: |
           set -euo pipefail
 
-          # If triggered by a tag (e.g., v5.0.6), extract version from tag
+          # Extract version from git tag (e.g., refs/tags/v4.3.6 -> 4.3.6)
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             TAG_VERSION="${GITHUB_REF#refs/tags/v}"
             echo "Tag trigger detected: building version $TAG_VERSION"
-            VERSIONS="[$TAG_VERSION]"
-          # If triggered by push to main, detect all available versions in versions/
-          elif [[ "${{ github.event_name }}" == "push" ]]; then
-            echo "Push trigger detected, scanning versions directory..."
-            VERSIONS_LIST=()
-            # Find all version directories that have a Dockerfile
-            for version_dir in versions/*/; do
-              if [[ -f "${version_dir}Dockerfile" ]]; then
-                version=$(basename "$version_dir")
-                VERSIONS_LIST+=("$version")
-              fi
-            done
-
-            if [ ${#VERSIONS_LIST[@]} -gt 0 ]; then
-              # Build JSON array of all versions (compact format)
-              VERSIONS=$(printf '%s\n' "${VERSIONS_LIST[@]}" | jq -R . | jq -sc .)
-            else
-              # No versions directory, use default
-              VERSIONS='["5.0.6"]'
-            fi
+            VERSIONS="[\"$TAG_VERSION\"]"
           else
-            # workflow_dispatch or other triggers - use input version
+            # workflow_dispatch - use input version
             INPUT_VERSION="${{ inputs.uos_server_version || '5.0.6' }}"
+            echo "Workflow dispatch: building version $INPUT_VERSION"
             VERSIONS="[\"$INPUT_VERSION\"]"
           fi
 
@@ -120,7 +93,7 @@ jobs:
 
           VERSION="${{ matrix.version }}"
 
-          # workflow_dispatch inputs may be empty on push/tag triggers, so set defaults
+          # workflow_dispatch inputs may be empty on tag triggers, so set defaults
           INSTALLER_URL="${{ inputs.installer_url || '' }}"
           # Map known versions to their default URLs (can be overridden via input)
           declare -A VERSION_URLS=(
@@ -137,17 +110,6 @@ jobs:
           IMAGE_NAME="${{ inputs.image_name || 'unifi-os-server-docker'}}"
           PUSH="${{ inputs.push || 'true' }}"
 
-          # Determine build context - use version directory if it exists
-          if [[ -f "versions/$VERSION/Dockerfile" ]]; then
-            BUILD_CONTEXT="versions/$VERSION"
-            DOCKERFILE="versions/$VERSION/Dockerfile"
-            echo "Using version-specific build context: $BUILD_CONTEXT"
-          else
-            BUILD_CONTEXT="."
-            DOCKERFILE="Dockerfile"
-            echo "Using default build context (root)"
-          fi
-
           OWNER_LC="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           GHCR_IMAGE="${{ env.REGISTRY }}/${OWNER_LC}/${IMAGE_NAME}"
           GHCR_BASE_IMAGE="${{ env.REGISTRY }}/${OWNER_LC}/${IMAGE_NAME}-base"
@@ -159,8 +121,6 @@ jobs:
           echo "push=$PUSH" >> "$GITHUB_OUTPUT"
           echo "ghcr_image=$GHCR_IMAGE" >> "$GITHUB_OUTPUT"
           echo "ghcr_base_image=$GHCR_BASE_IMAGE" >> "$GITHUB_OUTPUT"
-          echo "build_context=$BUILD_CONTEXT" >> "$GITHUB_OUTPUT"
-          echo "dockerfile=$DOCKERFILE" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies (binwalk + skopeo)
         shell: bash
@@ -263,8 +223,6 @@ jobs:
           GHCR_IMAGE="${{ steps.vars.outputs.ghcr_image }}"
           UOS_SERVER_VERSION="${{ steps.vars.outputs.uos_server_version }}"
           FIRMWARE_PLATFORM="${{ steps.vars.outputs.firmware_platform }}"
-          BUILD_CONTEXT="${{ steps.vars.outputs.build_context }}"
-          DOCKERFILE="${{ steps.vars.outputs.dockerfile }}"
 
           TAG1="${GHCR_IMAGE}:${UOS_SERVER_VERSION}"
           TAG2="${GHCR_IMAGE}:latest"
@@ -272,10 +230,9 @@ jobs:
           docker build \
               --build-arg UOS_SERVER_VERSION="${UOS_SERVER_VERSION}" \
               --build-arg FIRMWARE_PLATFORM="${FIRMWARE_PLATFORM}" \
-              -f "${DOCKERFILE}" \
               -t "${TAG1}" \
               -t "${TAG2}" \
-              "${BUILD_CONTEXT}"
+              .
 
           if [[ "${{ steps.vars.outputs.push }}" == "true" ]]; then
               docker push "${TAG1}"
@@ -288,5 +245,4 @@ jobs:
           echo "Version: ${{ matrix.version }}"
           echo "Base image: ${{ steps.vars.outputs.ghcr_base_image }}:${{ steps.vars.outputs.uos_server_version }}"
           echo "Final image: ${{ steps.vars.outputs.ghcr_image }}:${{ steps.vars.outputs.uos_server_version }}"
-          echo "Build context: ${{ steps.vars.outputs.build_context }}"
           echo "Push: ${{ steps.vars.outputs.push }}"
