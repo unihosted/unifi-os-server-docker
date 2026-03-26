@@ -130,23 +130,34 @@ if [ -f "/usr/bin/mongod" ]; then
 fi
 
 # Inject localhost bypass (port 7443 → controller on 8081, skipping UOS SSO).
-# Runs in background because UOS nginx hasn't started yet at this point.
+# Runs as a persistent background watcher because UOS regenerates the nginx
+# config directory on restart / config changes, which removes our file.
 (
     BYPASS_SRC="/root/site-localhost-bypass.conf"
     CONFIG_DIR="/data/unifi-core/config/http"
     CONFIG_FILE="${CONFIG_DIR}/site-localhost-bypass.conf"
+    UOS_SOCK="/data/unifi-core/config/http/uos-http.sock"
+    BYPASS_HASH=$(md5sum "$BYPASS_SRC" | awk '{print $1}')
 
-    while [ ! -d "$CONFIG_DIR" ]; do sleep 5; done
-    while [ ! -f "/data/unifi-core/config/unifi-core.crt" ]; do sleep 5; done
+    # Wait for UOS API to be fully ready before first injection, so we don't
+    # get overwritten by UOS still generating its own nginx configs.
+    echo "Localhost bypass: waiting for UOS API..."
+    while ! curl -sf --unix-socket "$UOS_SOCK" http://localhost/api/system > /dev/null 2>&1; do
+        sleep 10
+    done
+    echo "Localhost bypass: UOS API is ready"
 
-    cp "$BYPASS_SRC" "$CONFIG_FILE"
+    while true; do
+        # (Re-)inject if the file is missing or has been modified
+        CURRENT_HASH=$(md5sum "$CONFIG_FILE" 2>/dev/null | awk '{print $1}')
+        if [ "$CURRENT_HASH" != "$BYPASS_HASH" ]; then
+            cp "$BYPASS_SRC" "$CONFIG_FILE"
+            nginx -s reload 2>/dev/null || true
+            echo "Localhost bypass: injected on port 7443"
+        fi
 
-    # Wait for nginx master process before reloading
-    while ! pidof nginx > /dev/null 2>&1; do sleep 2; done
-    sleep 2
-    nginx -s reload 2>/dev/null || true
-
-    echo "Localhost bypass: injected on port 7443"
+        sleep 30
+    done
 ) &
 
 # Expose PostgreSQL on all interfaces so Docker port mapping can reach it.
