@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Discussions
+    url: https://github.com/unihosted/unifi-os-server-docker/discussions
+    about: Ask questions, share ideas, or get help
+  - name: UniFi Community Forums
+    url: https://community.ui.com/
+    about: Official Ubiquiti community forums for UniFi questions

@@ -54,7 +54,7 @@ RUN echo "" >> /usr/share/unifi-core/http/site-local-ip.conf && \
     echo "include /usr/share/unifi-core/http/site-localhost-bypass.conf;" >> /usr/share/unifi-core/http/site-local-ip.conf
 
 # Copy entrypoint script
-COPY entrypoint.sh /entrypoint.sh
+COPY uos-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Set up environment defaults
