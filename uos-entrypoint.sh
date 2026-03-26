@@ -152,7 +152,11 @@ fi
         CURRENT_HASH=$(md5sum "$CONFIG_FILE" 2>/dev/null | awk '{print $1}')
         if [ "$CURRENT_HASH" != "$BYPASS_HASH" ]; then
             cp "$BYPASS_SRC" "$CONFIG_FILE"
-            nginx -s reload 2>/dev/null || true
+            # Full restart required: reload reuses existing sockets and won't
+            # pick up changes to listen directives.
+            nginx -s quit 2>/dev/null || true
+            sleep 2
+            nginx 2>/dev/null || true
             echo "Localhost bypass: injected on port 7443"
         fi
 
