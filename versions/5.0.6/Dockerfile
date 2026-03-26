@@ -1,11 +1,3 @@
-# This is a template Dockerfile used when no version-specific Dockerfile exists.
-# The workflow will look for a version-specific Dockerfile in versions/{VERSION}/ first.
-#
-# To customize for a specific UniFi OS version:
-# 1. Create versions/{VERSION}/ directory (e.g., versions/5.0.6/)
-# 2. Copy this file and customize as needed
-# 3. Add any version-specific uos-entrypoint.sh and site-localhost-bypass.conf
-
 # The workflow loads the extracted base image as: uosserver:base
 FROM uosserver:base
 

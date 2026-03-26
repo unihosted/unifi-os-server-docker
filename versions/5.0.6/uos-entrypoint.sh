@@ -1,8 +1,5 @@
 #!/bin/bash
 
-# This is a template entrypoint script.
-# The workflow will use version-specific scripts from versions/{VERSION}/ when available.
-
 # Persist UOS_UUID env var
 if [ ! -f /data/uos_uuid ]; then
     if [ -n "${UOS_UUID+1}" ]; then
@@ -25,11 +22,11 @@ echo "UOSSERVER.0000000.$UOS_SERVER_VERSION.0000000.000000.0000" > /usr/lib/vers
 echo "Setting FIRMWARE_PLATFORM to $FIRMWARE_PLATFORM"
 echo "$FIRMWARE_PLATFORM" > /usr/lib/platform
 
-# Create eth0 alias to tap0 (requires NET_ADMIN cap & macvlan kernel module loaded on host)
+# Create eth0 alias to tap0 (requires NET_ADMIN cap & macvlan kernel module loaded on host) 
 if [ ! -d "/sys/devices/virtual/net/eth0" ] && [ -d "/sys/devices/virtual/net/tap0" ]; then
     ip link add name eth0 link tap0 type macvlan
     ip link set eth0 up
-fi
+fi 
 
 # Initialize nginx log dirs
 NXINX_LOG_DIR="/var/log/nginx"
@@ -124,6 +121,10 @@ set_property "db.mongo.local" "false"
 set_property "db.mongo.uri" "${MONGO_URI}/ace?${MONGO_PARAMS}"
 set_property "statdb.mongo.uri" "${MONGO_URI}/ace_stat?${MONGO_PARAMS}"
 
+
+
+
+
 # Remove the duplicate mongo server /usr/bin/mongod
 if [ -f "/usr/bin/mongod" ]; then
     rm -f /usr/bin/mongod
@@ -158,7 +159,7 @@ fi
     while [ ! -f "$PG_CONF" ]; do sleep 5; done
 
     if grep -q "^#\?listen_addresses" "$PG_CONF"; then
-        sed -i "s/^#\?listen_addresses.*/listen_addresses = '*' /" "$PG_CONF"
+        sed -i "s/^#\?listen_addresses.*/listen_addresses = '*'/" "$PG_CONF"
     else
         echo "listen_addresses = '*'" >> "$PG_CONF"
     fi

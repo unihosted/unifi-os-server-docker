@@ -25,11 +25,19 @@ on:
         default: "true"
 
   push:
-    branches: ["main"]
+    branches:
+      - main
     paths:
       - "Dockerfile"
       - "uos-entrypoint.sh"
+      - "site-localhost-bypass.conf"
       - ".github/workflows/extract-image.yml"
+      - "versions/**/Dockerfile"
+      - "versions/**/uos-entrypoint.sh"
+      - "versions/**/site-localhost-bypass.conf"
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
 
 permissions:
   contents: read
@@ -39,39 +47,115 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  build:
+  # Determine which versions to build
+  matrix:
     runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.set-matrix.outputs.versions }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine versions to build
+        id: set-matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # If triggered by a tag (e.g., v5.0.6), extract version from tag
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+            echo "Tag trigger detected: building version $TAG_VERSION"
+            VERSIONS="[$TAG_VERSION]"
+          # If triggered by push to versions/* paths, detect changed versions
+          elif [[ "${{ github.event_name }}" == "push" && -n "${{ github.event.before }}" ]]; then
+            echo "Push trigger detected, checking for version changes..."
+            CHANGED_VERSIONS=()
+            # Check git diff for changes in version directories
+            while IFS= read -r dir; do
+              if [[ -n "$dir" ]]; then
+                version=$(basename "$dir")
+                CHANGED_VERSIONS+=("$version")
+              fi
+            done < <(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" | grep -E '^versions/[^/]+/' | cut -d'/' -f2 | sort -u || true)
+
+            if [ ${#CHANGED_VERSIONS[@]} -gt 0 ]; then
+              # Build JSON array of changed versions
+              VERSIONS_JSON=$(printf '%s\n' "${CHANGED_VERSIONS[@]}" | jq -R . | jq -s .)
+              VERSIONS="$VERSIONS_JSON"
+            else
+              # No version-specific changes, use default
+              VERSIONS='["5.0.6"]'
+            fi
+          else
+            # workflow_dispatch or other triggers - use input version
+            INPUT_VERSION="${{ inputs.uos_server_version || '5.0.6' }}"
+            VERSIONS="[$INPUT_VERSION]"
+          fi
+
+          echo "versions=$VERSIONS"
+          echo "versions=$VERSIONS" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: matrix
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        version: ${{ fromJson(needs.matrix.outputs.versions) }}
+      fail-fast: false
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set variables
+      - name: Set variables for version ${{ matrix.version }}
         id: vars
         shell: bash
         run: |
           set -euo pipefail
 
-          # workflow_dispatch inputs are empty on push triggers, so set defaults.
+          VERSION="${{ matrix.version }}"
+
+          # workflow_dispatch inputs may be empty on push/tag triggers, so set defaults
           INSTALLER_URL="${{ inputs.installer_url || '' }}"
+          # Map known versions to their default URLs (can be overridden via input)
+          declare -A VERSION_URLS=(
+            ["5.0.6"]="https://fw-download.ubnt.com/data/unifi-os-server/1856-linux-x64-5.0.6-33f4990f-6c68-4e72-9d9c-477496c22450.6-x64"
+          )
+          if [[ -z "$INSTALLER_URL" && -n "${VERSION_URLS[$VERSION]:-}" ]]; then
+            INSTALLER_URL="${VERSION_URLS[$VERSION]}"
+          fi
+          # Fallback if still empty
           [[ -n "$INSTALLER_URL" ]] || INSTALLER_URL="https://fw-download.ubnt.com/data/unifi-os-server/1856-linux-x64-5.0.6-33f4990f-6c68-4e72-9d9c-477496c22450.6-x64"
 
-          UOS_SERVER_VERSION="${{ inputs.uos_server_version || '5.0.6' }}"
           FIRMWARE_PLATFORM="${{ inputs.firmware_platform || 'linux-x64' }}"
           IMAGE_NAME="${{ inputs.image_name || 'unifi-os-server-docker'}}"
           PUSH="${{ inputs.push || 'true' }}"
+
+          # Determine build context - use version directory if it exists
+          if [[ -f "versions/$VERSION/Dockerfile" ]]; then
+            BUILD_CONTEXT="versions/$VERSION"
+            DOCKERFILE="versions/$VERSION/Dockerfile"
+            echo "Using version-specific build context: $BUILD_CONTEXT"
+          else
+            BUILD_CONTEXT="."
+            DOCKERFILE="Dockerfile"
+            echo "Using default build context (root)"
+          fi
 
           OWNER_LC="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           GHCR_IMAGE="${{ env.REGISTRY }}/${OWNER_LC}/${IMAGE_NAME}"
           GHCR_BASE_IMAGE="${{ env.REGISTRY }}/${OWNER_LC}/${IMAGE_NAME}-base"
 
           echo "installer_url=$INSTALLER_URL" >> "$GITHUB_OUTPUT"
-          echo "uos_server_version=$UOS_SERVER_VERSION" >> "$GITHUB_OUTPUT"
+          echo "uos_server_version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "firmware_platform=$FIRMWARE_PLATFORM" >> "$GITHUB_OUTPUT"
           echo "image_name=$IMAGE_NAME" >> "$GITHUB_OUTPUT"
           echo "push=$PUSH" >> "$GITHUB_OUTPUT"
           echo "ghcr_image=$GHCR_IMAGE" >> "$GITHUB_OUTPUT"
           echo "ghcr_base_image=$GHCR_BASE_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "build_context=$BUILD_CONTEXT" >> "$GITHUB_OUTPUT"
+          echo "dockerfile=$DOCKERFILE" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies (binwalk + skopeo)
         shell: bash
@@ -174,6 +258,8 @@ jobs:
           GHCR_IMAGE="${{ steps.vars.outputs.ghcr_image }}"
           UOS_SERVER_VERSION="${{ steps.vars.outputs.uos_server_version }}"
           FIRMWARE_PLATFORM="${{ steps.vars.outputs.firmware_platform }}"
+          BUILD_CONTEXT="${{ steps.vars.outputs.build_context }}"
+          DOCKERFILE="${{ steps.vars.outputs.dockerfile }}"
 
           TAG1="${GHCR_IMAGE}:${UOS_SERVER_VERSION}"
           TAG2="${GHCR_IMAGE}:latest"
@@ -181,9 +267,10 @@ jobs:
           docker build \
               --build-arg UOS_SERVER_VERSION="${UOS_SERVER_VERSION}" \
               --build-arg FIRMWARE_PLATFORM="${FIRMWARE_PLATFORM}" \
+              -f "${DOCKERFILE}" \
               -t "${TAG1}" \
               -t "${TAG2}" \
-              .
+              "${BUILD_CONTEXT}"
 
           if [[ "${{ steps.vars.outputs.push }}" == "true" ]]; then
               docker push "${TAG1}"
@@ -193,6 +280,8 @@ jobs:
       - name: Summary
         shell: bash
         run: |
+          echo "Version: ${{ matrix.version }}"
           echo "Base image: ${{ steps.vars.outputs.ghcr_base_image }}:${{ steps.vars.outputs.uos_server_version }}"
           echo "Final image: ${{ steps.vars.outputs.ghcr_image }}:${{ steps.vars.outputs.uos_server_version }}"
+          echo "Build context: ${{ steps.vars.outputs.build_context }}"
           echo "Push: ${{ steps.vars.outputs.push }}"
