@@ -1,4 +1,4 @@
-FROM ghcr.io/dockette/stretch
+FROM ghcr.io/dockette/debian:stretch
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
