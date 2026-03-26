@@ -64,6 +64,20 @@ To add support for a new UniFi OS version (e.g., 6.0.0):
    git push origin v6.0.0
    ```
 
+## Rebuilding an Existing Version
+
+To rebuild an existing version (e.g., after fixing the entrypoint or config files):
+
+```bash
+# Delete the old tag locally and remotely, then recreate it on the current commit
+git tag -d v5.0.6
+git push origin :refs/tags/v5.0.6
+git tag v5.0.6
+git push origin v5.0.6
+```
+
+This re-triggers the workflow, which will rebuild and push the image using the updated files from `main`.
+
 ## Image Tags
 
 Images are published to GitHub Container Registry (GHCR):
