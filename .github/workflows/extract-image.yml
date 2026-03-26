@@ -80,9 +80,8 @@ jobs:
             done
 
             if [ ${#VERSIONS_LIST[@]} -gt 0 ]; then
-              # Build JSON array of all versions
-              VERSIONS_JSON=$(printf '%s\n' "${VERSIONS_LIST[@]}" | jq -R . | jq -s .)
-              VERSIONS="$VERSIONS_JSON"
+              # Build JSON array of all versions (compact format)
+              VERSIONS=$(printf '%s\n' "${VERSIONS_LIST[@]}" | jq -R . | jq -sc .)
             else
               # No versions directory, use default
               VERSIONS='["5.0.6"]'
@@ -90,11 +89,16 @@ jobs:
           else
             # workflow_dispatch or other triggers - use input version
             INPUT_VERSION="${{ inputs.uos_server_version || '5.0.6' }}"
-            VERSIONS="[$INPUT_VERSION]"
+            VERSIONS="[\"$INPUT_VERSION\"]"
           fi
 
-          echo "versions=$VERSIONS"
-          echo "versions=$VERSIONS" >> "$GITHUB_OUTPUT"
+          echo "Found versions: $VERSIONS"
+          # Use multiline syntax for JSON output
+          {
+            echo 'versions<<EOF'
+            echo "$VERSIONS"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
   build:
     needs: matrix
