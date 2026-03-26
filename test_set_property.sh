@@ -122,6 +122,60 @@ set_property "db.mongo.uri" "${MONGO_URI}/ace?${MONGO_PARAMS}"
 set_property "statdb.mongo.uri" "${MONGO_URI}/ace_stat?${MONGO_PARAMS}"
 assert_file "ENV var URIs idempotent after re-run" "$expected"
 
+# --- Test 12: UNIFI_SYSPROP_* env vars set properties ---
+echo -n "" > "$UNIFI_SYSTEM_PROPERTIES"
+export UNIFI_SYSPROP_system_ip="10.0.0.42"
+export UNIFI_SYSPROP_db__mongo__local="false"
+export UNIFI_SYSPROP_custom__nested__deep__key="hello"
+while IFS= read -r line; do
+    envname="${line%%=*}"
+    envvalue="${line#*=}"
+    propkey="${envname#UNIFI_SYSPROP_}"
+    propkey="${propkey//__/.}"
+    set_property "$propkey" "$envvalue"
+done < <(env | grep '^UNIFI_SYSPROP_')
+actual="$(sort "$UNIFI_SYSTEM_PROPERTIES")"
+expected="$(printf 'custom.nested.deep.key=hello\ndb.mongo.local=false\nsystem_ip=10.0.0.42')"
+if [ "$actual" = "$expected" ]; then
+    echo "PASS: UNIFI_SYSPROP_* env vars set properties"
+    ((PASS++))
+else
+    echo "FAIL: UNIFI_SYSPROP_* env vars set properties"
+    echo "  Expected (sorted):"
+    echo "$expected" | sed 's/^/    /'
+    echo "  Actual (sorted):"
+    echo "$actual" | sed 's/^/    /'
+    ((FAIL++))
+fi
+unset UNIFI_SYSPROP_system_ip UNIFI_SYSPROP_db__mongo__local UNIFI_SYSPROP_custom__nested__deep__key
+
+# --- Test 13: UNIFI_SYSPROP_* overrides existing property ---
+echo -n "" > "$UNIFI_SYSTEM_PROPERTIES"
+set_property "system_ip" "192.168.1.1"
+export UNIFI_SYSPROP_system_ip="10.0.0.99"
+while IFS= read -r line; do
+    envname="${line%%=*}"
+    envvalue="${line#*=}"
+    propkey="${envname#UNIFI_SYSPROP_}"
+    propkey="${propkey//__/.}"
+    set_property "$propkey" "$envvalue"
+done < <(env | grep '^UNIFI_SYSPROP_')
+assert_file "UNIFI_SYSPROP_* overrides existing property" "system_ip=10.0.0.99"
+unset UNIFI_SYSPROP_system_ip
+
+# --- Test 14: UNIFI_SYSPROP_* with value containing = ---
+echo -n "" > "$UNIFI_SYSTEM_PROPERTIES"
+export UNIFI_SYSPROP_some__url="http://host?a=1&b=2"
+while IFS= read -r line; do
+    envname="${line%%=*}"
+    envvalue="${line#*=}"
+    propkey="${envname#UNIFI_SYSPROP_}"
+    propkey="${propkey//__/.}"
+    set_property "$propkey" "$envvalue"
+done < <(env | grep '^UNIFI_SYSPROP_')
+assert_file "UNIFI_SYSPROP_* value containing =" "some.url=http://host?a=1&b=2"
+unset UNIFI_SYSPROP_some__url
+
 # --- Summary ---
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

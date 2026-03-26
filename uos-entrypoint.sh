@@ -124,6 +124,19 @@ set_property "db.mongo.local" "false"
 set_property "db.mongo.uri" "${MONGO_URI}/ace?${MONGO_PARAMS}"
 set_property "statdb.mongo.uri" "${MONGO_URI}/ace_stat?${MONGO_PARAMS}"
 
+# Apply custom system.properties from UNIFI_SYSPROP_* env vars.
+# Double underscores in the var name become dots in the property key.
+#   UNIFI_SYSPROP_db__mongo__local=false  →  db.mongo.local=false
+#   UNIFI_SYSPROP_system_ip=10.0.0.1      →  system_ip=10.0.0.1
+while IFS= read -r line; do
+    envname="${line%%=*}"
+    envvalue="${line#*=}"
+    propkey="${envname#UNIFI_SYSPROP_}"
+    propkey="${propkey//__/.}"
+    echo "Setting system.properties (env override): ${propkey}=${envvalue}"
+    set_property "$propkey" "$envvalue"
+done < <(env | grep '^UNIFI_SYSPROP_')
+
 # Remove the duplicate mongo server /usr/bin/mongod
 if [ -f "/usr/bin/mongod" ]; then
     rm -f /usr/bin/mongod

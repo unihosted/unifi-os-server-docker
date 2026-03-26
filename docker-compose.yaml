@@ -34,6 +34,13 @@ services:
       MONGO_PORT: "27017"
       MONGO_USER: root
       MONGO_PASS: root
+      # Set any UniFi system.properties via UNIFI_SYSPROP_* env vars.
+      # Double underscores (__) in the name become dots (.) in the property key.
+      # These are applied after the built-in defaults, so they can override anything.
+      # Examples:
+      #   UNIFI_SYSPROP_system_ip: "10.0.0.1"
+      #   UNIFI_SYSPROP_db__mongo__local: "false"
+      #   UNIFI_SYSPROP_unifi__https__port: "8443"
 
   unifi-network-mongodb:
     container_name: unifi-os-server-mongodb
