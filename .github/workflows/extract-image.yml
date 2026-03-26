@@ -120,6 +120,7 @@ jobs:
           INSTALLER_URL="${{ inputs.installer_url || '' }}"
           # Map known versions to their default URLs (can be overridden via input)
           declare -A VERSION_URLS=(
+            ["4.3.6"]="https://fw-download.ubnt.com/data/unifi-os-server/2f3a-linux-x64-4.3.6-be3b4ae0-6bcd-435d-b893-e93da668b9d0.6-x64"
             ["5.0.6"]="https://fw-download.ubnt.com/data/unifi-os-server/1856-linux-x64-5.0.6-33f4990f-6c68-4e72-9d9c-477496c22450.6-x64"
           )
           if [[ -z "$INSTALLER_URL" && -n "${VERSION_URLS[$VERSION]:-}" ]]; then

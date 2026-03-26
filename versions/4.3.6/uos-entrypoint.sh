@@ -1,0 +1,179 @@
+#!/bin/bash
+
+# Persist UOS_UUID env var
+if [ ! -f /data/uos_uuid ]; then
+    if [ -n "${UOS_UUID+1}" ]; then
+        echo "Setting UUID to $UOS_UUID"
+        echo "$UOS_UUID" > /data/uos_uuid
+    else
+        echo "No UUID present, generating..."
+        UUID=$(cat /proc/sys/kernel/random/uuid)
+
+        # Spoof a v5 UUID
+        UOS_UUID=$(echo $UUID | sed s/./5/15)
+        echo "Setting UUID to $UOS_UUID"
+        echo "$UOS_UUID" > /data/uos_uuid
+    fi
+fi
+
+# Read version from package.json and write version string
+echo "Setting UOS_SERVER_VERSION to $UOS_SERVER_VERSION"
+echo "UOSSERVER.0000000.$UOS_SERVER_VERSION.0000000.000000.0000" > /usr/lib/version
+echo "Setting FIRMWARE_PLATFORM to $FIRMWARE_PLATFORM"
+echo "$FIRMWARE_PLATFORM" > /usr/lib/platform
+
+# Create eth0 alias to tap0 (requires NET_ADMIN cap & macvlan kernel module loaded on host) 
+if [ ! -d "/sys/devices/virtual/net/eth0" ] && [ -d "/sys/devices/virtual/net/tap0" ]; then
+    ip link add name eth0 link tap0 type macvlan
+    ip link set eth0 up
+fi 
+
+# Initialize nginx log dirs
+NXINX_LOG_DIR="/var/log/nginx"
+if [ ! -d "$NXINX_LOG_DIR" ]; then
+    mkdir -p "$NXINX_LOG_DIR"
+    chown nginx:nginx "$NXINX_LOG_DIR"
+    chmod 755 "$NXINX_LOG_DIR"
+fi
+
+# Initialize mongodb log dirs
+MONGODB_LOG_DIR="/var/log/mongodb"
+if [ ! -d "$MONGODB_LOG_DIR" ]; then
+    mkdir -p "$MONGODB_LOG_DIR"
+    chown mongodb:mongodb "$MONGODB_LOG_DIR"
+    chmod 755 "$MONGODB_LOG_DIR"
+fi
+
+# Initialize mongodb lib dirs
+MONGODB_LIB_DIR="/var/lib/mongodb"
+chown -R mongodb:mongodb "$MONGODB_LIB_DIR"
+
+# Initialize rabbitmq log dirs
+RABBITMQ_LOG_DIR="/var/log/rabbitmq"
+if [ ! -d "$RABBITMQ_LOG_DIR" ]; then
+    mkdir -p "$RABBITMQ_LOG_DIR"
+    chown rabbitmq:rabbitmq "$RABBITMQ_LOG_DIR"
+    chmod 755 "$RABBITMQ_LOG_DIR"
+fi
+
+# Apply Synology patches
+SYS_VENDOR="/sys/class/dmi/id/sys_vendor"
+if [ -f "$SYS_VENDOR" ] && grep -q "Synology Inc." "$SYS_VENDOR"; then
+    echo "Synology hardware found, applying patches..."
+
+    # Set Postgres overrides
+    mkdir -p /etc/systemd/system/postgresql@14-main.service.d
+    {
+        echo "[Service]"
+        echo "PIDFile="
+    } > /etc/systemd/system/postgresql@14-main.service.d/override.conf
+
+    # Set RabbitMQ overrides
+    mkdir -p /etc/systemd/system/rabbitmq-server.service.d
+    {
+        echo "[Service]"
+        echo "Type=simple"
+    } > /etc/systemd/system/rabbitmq-server.service.d/override.conf
+
+    # Set ulp-go overrides
+    mkdir -p /etc/systemd/system/ulp-go.service.d
+    {
+        echo "[Service]"
+        echo "Type=simple"
+    } > /etc/systemd/system/ulp-go.service.d/override.conf
+
+    echo "Synology patches applied!"
+fi
+
+# Set UOS_SYSTEM_IP (required)
+if [ -z "${UOS_SYSTEM_IP}" ]; then
+    echo "ERROR: UOS_SYSTEM_IP is required but not set"
+    exit 1
+fi
+UNIFI_SYSTEM_PROPERTIES="/var/lib/unifi/system.properties"
+
+set_property() {
+    local key="$1" value="$2"
+    local escaped_value="${value//\\/\\\\}"
+    escaped_value="${escaped_value//&/\\&}"
+    if grep -q "^${key}=" "$UNIFI_SYSTEM_PROPERTIES" 2>/dev/null; then
+        sed -i "s|^${key}=.*|${key}=${escaped_value}|" "$UNIFI_SYSTEM_PROPERTIES"
+    else
+        echo "${key}=${value}" >> "$UNIFI_SYSTEM_PROPERTIES"
+    fi
+}
+
+MONGO_HOST="${MONGO_HOST:-unifi-os-server-mongodb}"
+MONGO_PORT="${MONGO_PORT:-27017}"
+MONGO_USER="${MONGO_USER:-root}"
+MONGO_PASS="${MONGO_PASS:-root}"
+MONGO_TLS="${MONGO_TLS:-false}"
+MONGO_AUTH_SOURCE="${MONGO_AUTH_SOURCE-admin}"
+
+MONGO_URI="mongodb\\://${MONGO_USER}\\:${MONGO_PASS}@${MONGO_HOST}\\:${MONGO_PORT}"
+MONGO_PARAMS="tls\\=${MONGO_TLS}"
+if [ -n "${MONGO_AUTH_SOURCE}" ]; then
+    MONGO_PARAMS="${MONGO_PARAMS}&authSource\\=${MONGO_AUTH_SOURCE}"
+fi
+
+set_property "system_ip" "$UOS_SYSTEM_IP"
+set_property "db.mongo.local" "false"
+set_property "db.mongo.uri" "${MONGO_URI}/ace?${MONGO_PARAMS}"
+set_property "statdb.mongo.uri" "${MONGO_URI}/ace_stat?${MONGO_PARAMS}"
+
+
+
+
+
+# Remove the duplicate mongo server /usr/bin/mongod
+if [ -f "/usr/bin/mongod" ]; then
+    rm -f /usr/bin/mongod
+fi
+
+# Inject localhost bypass (port 7443 → controller on 8081, skipping UOS SSO).
+# Runs in background because UOS nginx hasn't started yet at this point.
+(
+    BYPASS_SRC="/root/site-localhost-bypass.conf"
+    CONFIG_DIR="/data/unifi-core/config/http"
+    CONFIG_FILE="${CONFIG_DIR}/site-localhost-bypass.conf"
+
+    while [ ! -d "$CONFIG_DIR" ]; do sleep 5; done
+    while [ ! -f "/data/unifi-core/config/unifi-core.crt" ]; do sleep 5; done
+
+    cp "$BYPASS_SRC" "$CONFIG_FILE"
+
+    # Wait for nginx master process before reloading
+    while ! pidof nginx > /dev/null 2>&1; do sleep 2; done
+    sleep 2
+    nginx -s reload 2>/dev/null || true
+
+    echo "Localhost bypass: injected on port 7443"
+) &
+
+# Expose PostgreSQL on all interfaces so Docker port mapping can reach it.
+# listen_addresses requires a restart (reload is not enough).
+(
+    PG_CONF="/etc/postgresql/14/main/postgresql.conf"
+    PG_HBA="/etc/postgresql/14/main/pg_hba.conf"
+
+    while [ ! -f "$PG_CONF" ]; do sleep 5; done
+
+    if grep -q "^#\?listen_addresses" "$PG_CONF"; then
+        sed -i "s/^#\?listen_addresses.*/listen_addresses = '*'/" "$PG_CONF"
+    else
+        echo "listen_addresses = '*'" >> "$PG_CONF"
+    fi
+
+    if ! grep -q "^host all all 0.0.0.0/0" "$PG_HBA" 2>/dev/null; then
+        echo "host all all 0.0.0.0/0 trust" >> "$PG_HBA"
+    fi
+
+    # Wait for systemd to be up, then restart PostgreSQL to pick up listen_addresses
+    while ! systemctl is-system-running 2>/dev/null | grep -qE "running|degraded"; do sleep 2; done
+    systemctl restart postgresql@14-main 2>/dev/null || systemctl restart postgresql 2>/dev/null || true
+
+    echo "PostgreSQL: exposed on port 5432"
+) &
+
+# Start systemd
+exec /sbin/init
