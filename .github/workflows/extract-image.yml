@@ -16,9 +16,9 @@ on:
         required: true
         default: "linux-x64"
       image_name:
-        description: "Final image name (without registry). Example: unifi-os-server"
+        description: "Final image name (without registry). Example: unifi-os-server-docker"
         required: true
-        default: "unifi-os-server"
+        default: "unifi-os-server-docker"
       push:
         description: "Push to GHCR (true/false)"
         required: true
@@ -58,7 +58,7 @@ jobs:
 
           UOS_SERVER_VERSION="${{ inputs.uos_server_version || '5.0.6' }}"
           FIRMWARE_PLATFORM="${{ inputs.firmware_platform || 'linux-x64' }}"
-          IMAGE_NAME="${{ inputs.image_name || 'unifi-os-server' }}"
+          IMAGE_NAME="${{ inputs.image_name || 'unifi-os-server-docker'}}"
           PUSH="${{ inputs.push || 'true' }}"
 
           OWNER_LC="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
