@@ -67,24 +67,24 @@ jobs:
             TAG_VERSION="${GITHUB_REF#refs/tags/v}"
             echo "Tag trigger detected: building version $TAG_VERSION"
             VERSIONS="[$TAG_VERSION]"
-          # If triggered by push to versions/* paths, detect changed versions
-          elif [[ "${{ github.event_name }}" == "push" && -n "${{ github.event.before }}" ]]; then
-            echo "Push trigger detected, checking for version changes..."
-            CHANGED_VERSIONS=()
-            # Check git diff for changes in version directories
-            while IFS= read -r dir; do
-              if [[ -n "$dir" ]]; then
-                version=$(basename "$dir")
-                CHANGED_VERSIONS+=("$version")
+          # If triggered by push to main, detect all available versions in versions/
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "Push trigger detected, scanning versions directory..."
+            VERSIONS_LIST=()
+            # Find all version directories that have a Dockerfile
+            for version_dir in versions/*/; do
+              if [[ -f "${version_dir}Dockerfile" ]]; then
+                version=$(basename "$version_dir")
+                VERSIONS_LIST+=("$version")
               fi
-            done < <(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" | grep -E '^versions/[^/]+/' | cut -d'/' -f2 | sort -u || true)
+            done
 
-            if [ ${#CHANGED_VERSIONS[@]} -gt 0 ]; then
-              # Build JSON array of changed versions
-              VERSIONS_JSON=$(printf '%s\n' "${CHANGED_VERSIONS[@]}" | jq -R . | jq -s .)
+            if [ ${#VERSIONS_LIST[@]} -gt 0 ]; then
+              # Build JSON array of all versions
+              VERSIONS_JSON=$(printf '%s\n' "${VERSIONS_LIST[@]}" | jq -R . | jq -s .)
               VERSIONS="$VERSIONS_JSON"
             else
-              # No version-specific changes, use default
+              # No versions directory, use default
               VERSIONS='["5.0.6"]'
             fi
           else
