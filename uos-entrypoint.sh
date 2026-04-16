@@ -225,6 +225,14 @@ fi
 #     log "PostgreSQL: exposed on port 5432"
 # ) &
 
+# Forward journalctl to Docker log stream.
+# Save Docker's stdout before systemd replaces it with /dev/null.
+exec 3>&1
+(
+    while ! journalctl -n 0 2>/dev/null; do sleep 2; done
+    exec journalctl -f --no-hostname -o short >&3 2>&3
+) &
+
 # Start systemd
 log "Starting systemd init"
 exec /sbin/init
