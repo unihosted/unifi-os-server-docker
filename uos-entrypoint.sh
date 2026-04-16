@@ -229,7 +229,11 @@ fi
 # Save Docker's stdout before systemd replaces it with /dev/null.
 exec 3>&1
 (
-    while ! journalctl -n 0 2>/dev/null; do sleep 2; done
+    # Wait until systemd-journald has created its journal files.
+    # journalctl exits 0 even without files, so check its output instead.
+    while journalctl -n 0 2>&1 | grep -q "No journal files were found"; do
+        sleep 1
+    done
     exec journalctl -f --no-hostname -o short >&3 2>&3
 ) &
 
