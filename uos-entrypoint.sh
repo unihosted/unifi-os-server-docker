@@ -199,31 +199,31 @@ fi
 #     done
 # ) &
 
-# # Expose PostgreSQL on all interfaces so Docker port mapping can reach it.
-# # listen_addresses requires a restart (reload is not enough).
-# (
-#     PG_CONF="/etc/postgresql/14/main/postgresql.conf"
-#     PG_HBA="/etc/postgresql/14/main/pg_hba.conf"
+# Expose PostgreSQL on all interfaces so Docker port mapping can reach it.
+# listen_addresses requires a restart (reload is not enough).
+(
+    PG_CONF="/etc/postgresql/14/main/postgresql.conf"
+    PG_HBA="/etc/postgresql/14/main/pg_hba.conf"
 
-#     log "PostgreSQL exposure worker started"
-#     while [ ! -f "$PG_CONF" ]; do sleep 5; done
+    log "PostgreSQL exposure worker started"
+    while [ ! -f "$PG_CONF" ]; do sleep 5; done
 
-#     if grep -q "^#\?listen_addresses" "$PG_CONF"; then
-#         sed -i "s/^#\?listen_addresses.*/listen_addresses = '*' /" "$PG_CONF"
-#     else
-#         echo "listen_addresses = '*'" >> "$PG_CONF"
-#     fi
+    if grep -q "^#\?listen_addresses" "$PG_CONF"; then
+        sed -i "s/^#\?listen_addresses.*/listen_addresses = '*' /" "$PG_CONF"
+    else
+        echo "listen_addresses = '*'" >> "$PG_CONF"
+    fi
 
-#     if ! grep -q "^host all all 0.0.0.0/0" "$PG_HBA" 2>/dev/null; then
-#         echo "host all all 0.0.0.0/0 trust" >> "$PG_HBA"
-#     fi
+    if ! grep -q "^host all all 0.0.0.0/0" "$PG_HBA" 2>/dev/null; then
+        echo "host all all 0.0.0.0/0 trust" >> "$PG_HBA"
+    fi
 
-#     # Wait for systemd to be up, then restart PostgreSQL to pick up listen_addresses
-#     while ! systemctl is-system-running 2>/dev/null | grep -qE "running|degraded"; do sleep 2; done
-#     systemctl restart postgresql@14-main 2>/dev/null || systemctl restart postgresql 2>/dev/null || true
+    # Wait for systemd to be up, then restart PostgreSQL to pick up listen_addresses
+    while ! systemctl is-system-running 2>/dev/null | grep -qE "running|degraded"; do sleep 2; done
+    systemctl restart postgresql@14-main 2>/dev/null || systemctl restart postgresql 2>/dev/null || true
 
-#     log "PostgreSQL: exposed on port 5432"
-# ) &
+    log "PostgreSQL: exposed on port 5432"
+) &
 
 # Forward journalctl to Docker log stream.
 # Save Docker's stdout before systemd replaces it with /dev/null.
