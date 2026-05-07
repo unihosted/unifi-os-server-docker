@@ -21,7 +21,7 @@ RUN curl -fL --retry 5 --retry-delay 2 -o installer.bin "$INSTALLER_URL"
 
 RUN binwalk --run-as=root -e installer.bin
 
-RUN <<'EXTRACT'
+RUN /bin/bash <<'EXTRACT'
 set -eo pipefail
 
 IMAGE_TAR=$(find /build -type f -name 'image.tar' -print -quit)
