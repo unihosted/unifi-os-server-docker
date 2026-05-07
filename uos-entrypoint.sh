@@ -138,27 +138,12 @@ EXPOSE_NETWORK_APP="${EXPOSE_NETWORK_APP:-false}"
 if [ "$EXPOSE_NETWORK_APP" = "true" ]; then
 (
     BYPASS_SRC="/root/site-localhost-bypass.conf"
-    CONFIG_FILE="/data/unifi-core/config/http/site-localhost-bypass.conf"
-    UOS_SOCK="/data/unifi-core/config/http/uos-http.sock"
-    BYPASS_HASH=$(md5sum "$BYPASS_SRC" | awk '{print $1}')
+    CONFIG_DIR="/usr/share/unifi-core/http"
+    CONFIG_FILE="${CONFIG_DIR}/site-localhost-bypass.conf"
 
-    log "Network App bypass: watcher started, waiting for UOS API"
-    while ! curl -sf --unix-socket "$UOS_SOCK" http://localhost/api/system > /dev/null 2>&1; do
-        sleep 10
-    done
-    log "Network App bypass: UOS API is ready"
-
-    while true; do
-        CURRENT_HASH=$(md5sum "$CONFIG_FILE" 2>/dev/null | awk '{print $1}')
-        if [ "$CURRENT_HASH" != "$BYPASS_HASH" ]; then
-            cp "$BYPASS_SRC" "$CONFIG_FILE"
-            nginx -s quit 2>/dev/null || true
-            sleep 2
-            nginx 2>/dev/null || true
-            log "Network App bypass: injected on port 7443"
-        fi
-        sleep 30
-    done
+    mkdir -p "$CONFIG_DIR"
+    cp "$BYPASS_SRC" "$CONFIG_FILE"
+    log "Network App bypass: installed to $CONFIG_FILE"
 ) &
 fi
 
