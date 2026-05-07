@@ -4,7 +4,7 @@ log() {
     echo "[uos-entrypoint][$(date -Iseconds)] $*"
 }
 
-set_property() {
+set_unifi_property() {
     local key="$1" value="$2"
     local escaped_value="${value//\\/\\\\}"
     escaped_value="${escaped_value//&/\\&}"
@@ -96,7 +96,7 @@ fi
 UNIFI_SYSTEM_PROPERTIES="/var/lib/unifi/system.properties"
 
 
-set_property "system_ip" "$UOS_SYSTEM_IP"
+set_unifi_property "system_ip" "$UOS_SYSTEM_IP"
 
 # MONGO_INTERNAL=true  → keep the internal mongod that ships with UOS
 # MONGO_INTERNAL=false → use an external MongoDB (default, removes internal mongod)
@@ -117,9 +117,9 @@ if [ "$MONGO_INTERNAL" = "false" ]; then
     fi
 
     log "External MongoDB: ${MONGO_HOST}:${MONGO_PORT}"
-    set_property "db.mongo.local" "false"
-    set_property "db.mongo.uri" "${MONGO_URI}/ace?${MONGO_PARAMS}"
-    set_property "statdb.mongo.uri" "${MONGO_URI}/ace_stat?${MONGO_PARAMS}"
+    set_unifi_property "db.mongo.local" "false"
+    set_unifi_property "db.mongo.uri" "${MONGO_URI}/ace?${MONGO_PARAMS}"
+    set_unifi_property "statdb.mongo.uri" "${MONGO_URI}/ace_stat?${MONGO_PARAMS}"
 
     if [ -f "/usr/bin/mongod" ]; then
         log "Removing internal mongod binary"
@@ -127,43 +127,40 @@ if [ "$MONGO_INTERNAL" = "false" ]; then
     fi
 else
     log "Using internal MongoDB"
-    set_property "db.mongo.local" "true"
+    set_unifi_property "db.mongo.local" "true"
 fi
 
-# Inject localhost bypass (port 7443 → controller on 8081, skipping UOS SSO).
-# Runs as a persistent background watcher because UOS regenerates the nginx
-# config directory on restart / config changes, which removes our file.
-# (
-#     BYPASS_SRC="/root/site-localhost-bypass.conf"
-#     CONFIG_DIR="/data/unifi-core/config/http"
-#     CONFIG_FILE="${CONFIG_DIR}/site-localhost-bypass.conf"
-#     UOS_SOCK="/data/unifi-core/config/http/uos-http.sock"
-#     BYPASS_HASH=$(md5sum "$BYPASS_SRC" | awk '{print $1}')
+# EXPOSE_NETWORK_APP=true → inject nginx bypass on port 7443 directly to the
+# Network Application (port 8081), skipping UOS SSO.  A persistent watcher
+# re-injects the config whenever UOS regenerates its nginx directory.
+EXPOSE_NETWORK_APP="${EXPOSE_NETWORK_APP:-false}"
 
-#     # Wait for UOS API to be fully ready before first injection, so we don't
-#     # get overwritten by UOS still generating its own nginx configs.
-#     log "Localhost bypass: watcher started, waiting for UOS API"
-#     while ! curl -sf --unix-socket "$UOS_SOCK" http://localhost/api/system > /dev/null 2>&1; do
-#         sleep 10
-#     done
-#     log "Localhost bypass: UOS API is ready"
+if [ "$EXPOSE_NETWORK_APP" = "true" ]; then
+(
+    BYPASS_SRC="/root/site-localhost-bypass.conf"
+    CONFIG_FILE="/data/unifi-core/config/http/site-localhost-bypass.conf"
+    UOS_SOCK="/data/unifi-core/config/http/uos-http.sock"
+    BYPASS_HASH=$(md5sum "$BYPASS_SRC" | awk '{print $1}')
 
-#     while true; do
-#         # (Re-)inject if the file is missing or has been modified
-#         CURRENT_HASH=$(md5sum "$CONFIG_FILE" 2>/dev/null | awk '{print $1}')
-#         if [ "$CURRENT_HASH" != "$BYPASS_HASH" ]; then
-#             cp "$BYPASS_SRC" "$CONFIG_FILE"
-#             # Full restart required: reload reuses existing sockets and won't
-#             # pick up changes to listen directives.
-#             nginx -s quit 2>/dev/null || true
-#             sleep 2
-#             nginx 2>/dev/null || true
-#             log "Localhost bypass: injected on port 7443"
-#         fi
+    log "Network App bypass: watcher started, waiting for UOS API"
+    while ! curl -sf --unix-socket "$UOS_SOCK" http://localhost/api/system > /dev/null 2>&1; do
+        sleep 10
+    done
+    log "Network App bypass: UOS API is ready"
 
-#         sleep 30
-#     done
-# ) &
+    while true; do
+        CURRENT_HASH=$(md5sum "$CONFIG_FILE" 2>/dev/null | awk '{print $1}')
+        if [ "$CURRENT_HASH" != "$BYPASS_HASH" ]; then
+            cp "$BYPASS_SRC" "$CONFIG_FILE"
+            nginx -s quit 2>/dev/null || true
+            sleep 2
+            nginx 2>/dev/null || true
+            log "Network App bypass: injected on port 7443"
+        fi
+        sleep 30
+    done
+) &
+fi
 
 # Expose PostgreSQL on all interfaces so Docker port mapping can reach it.
 # listen_addresses requires a restart (reload is not enough).
