@@ -98,11 +98,11 @@ UNIFI_SYSTEM_PROPERTIES="/var/lib/unifi/system.properties"
 
 set_property "system_ip" "$UOS_SYSTEM_IP"
 
-# MONGO_EXTERNAL=true  → use an external MongoDB (default, removes internal mongod)
-# MONGO_EXTERNAL=false → keep the internal mongod that ships with UOS
-MONGO_EXTERNAL="${MONGO_EXTERNAL:-true}"
+# MONGO_INTERNAL=true  → keep the internal mongod that ships with UOS
+# MONGO_INTERNAL=false → use an external MongoDB (default, removes internal mongod)
+MONGO_INTERNAL="${MONGO_INTERNAL:-false}"
 
-if [ "$MONGO_EXTERNAL" = "true" ]; then
+if [ "$MONGO_INTERNAL" = "false" ]; then
     MONGO_HOST="${MONGO_HOST:-unifi-os-server-mongodb}"
     MONGO_PORT="${MONGO_PORT:-27017}"
     MONGO_USER="${MONGO_USER:-root}"
