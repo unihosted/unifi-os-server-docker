@@ -4,8 +4,17 @@ log() {
     echo "[uos-entrypoint][$(date -Iseconds)] $*"
 }
 
-# This is a template entrypoint script.
-# The workflow will use version-specific scripts from versions/{VERSION}/ when available.
+set_property() {
+    local key="$1" value="$2"
+    local escaped_value="${value//\\/\\\\}"
+    escaped_value="${escaped_value//&/\\&}"
+    if grep -q "^${key}=" "$UNIFI_SYSTEM_PROPERTIES" 2>/dev/null; then
+        sed -i "s|^${key}=.*|${key}=${escaped_value}|" "$UNIFI_SYSTEM_PROPERTIES"
+    else
+        echo "${key}=${value}" >> "$UNIFI_SYSTEM_PROPERTIES"
+    fi
+}
+
 
 # Persist UOS_UUID env var
 if [ ! -f /data/uos_uuid ]; then
@@ -79,35 +88,6 @@ if [ ! -d "$RABBITMQ_LOG_DIR" ]; then
     chmod 755 "$RABBITMQ_LOG_DIR"
 fi
 
-# # Apply Synology patches
-# SYS_VENDOR="/sys/class/dmi/id/sys_vendor"
-# if [ -f "$SYS_VENDOR" ] && grep -q "Synology Inc." "$SYS_VENDOR"; then
-#     log "Synology hardware found, applying patches"
-
-#     # Set Postgres overrides
-#     mkdir -p /etc/systemd/system/postgresql@14-main.service.d
-#     {
-#         echo "[Service]"
-#         echo "PIDFile="
-#     } > /etc/systemd/system/postgresql@14-main.service.d/override.conf
-
-#     # Set RabbitMQ overrides
-#     mkdir -p /etc/systemd/system/rabbitmq-server.service.d
-#     {
-#         echo "[Service]"
-#         echo "Type=simple"
-#     } > /etc/systemd/system/rabbitmq-server.service.d/override.conf
-
-#     # Set ulp-go overrides
-#     mkdir -p /etc/systemd/system/ulp-go.service.d
-#     {
-#         echo "[Service]"
-#         echo "Type=simple"
-#     } > /etc/systemd/system/ulp-go.service.d/override.conf
-
-#     log "Synology patches applied"
-# fi
-
 # Set UOS_SYSTEM_IP (required)
 if [ -z "${UOS_SYSTEM_IP}" ]; then
     log "ERROR: UOS_SYSTEM_IP is required but not set"
@@ -115,53 +95,39 @@ if [ -z "${UOS_SYSTEM_IP}" ]; then
 fi
 UNIFI_SYSTEM_PROPERTIES="/var/lib/unifi/system.properties"
 
-set_property() {
-    local key="$1" value="$2"
-    local escaped_value="${value//\\/\\\\}"
-    escaped_value="${escaped_value//&/\\&}"
-    if grep -q "^${key}=" "$UNIFI_SYSTEM_PROPERTIES" 2>/dev/null; then
-        sed -i "s|^${key}=.*|${key}=${escaped_value}|" "$UNIFI_SYSTEM_PROPERTIES"
-    else
-        echo "${key}=${value}" >> "$UNIFI_SYSTEM_PROPERTIES"
-    fi
-}
 
-MONGO_HOST="${MONGO_HOST:-unifi-os-server-mongodb}"
-MONGO_PORT="${MONGO_PORT:-27017}"
-MONGO_USER="${MONGO_USER:-root}"
-MONGO_PASS="${MONGO_PASS:-root}"
-MONGO_TLS="${MONGO_TLS:-false}"
-MONGO_AUTH_SOURCE="${MONGO_AUTH_SOURCE-admin}"
-
-MONGO_URI="mongodb\\://${MONGO_USER}\\:${MONGO_PASS}@${MONGO_HOST}\\:${MONGO_PORT}"
-MONGO_PARAMS="tls\\=${MONGO_TLS}"
-if [ -n "${MONGO_AUTH_SOURCE}" ]; then
-    MONGO_PARAMS="${MONGO_PARAMS}&authSource\\=${MONGO_AUTH_SOURCE}"
-fi
-
-log "Configuring system.properties with UOS_SYSTEM_IP=$UOS_SYSTEM_IP and MongoDB target ${MONGO_HOST}:${MONGO_PORT}"
 set_property "system_ip" "$UOS_SYSTEM_IP"
-set_property "db.mongo.local" "false"
-set_property "db.mongo.uri" "${MONGO_URI}/ace?${MONGO_PARAMS}"
-set_property "statdb.mongo.uri" "${MONGO_URI}/ace_stat?${MONGO_PARAMS}"
 
-# Apply custom system.properties from UNIFI_SYSPROP_* env vars.
-# Double underscores in the var name become dots in the property key.
-#   UNIFI_SYSPROP_db__mongo__local=false  →  db.mongo.local=false
-#   UNIFI_SYSPROP_system_ip=10.0.0.1      →  system_ip=10.0.0.1
-# while IFS= read -r line; do
-#     envname="${line%%=*}"
-#     envvalue="${line#*=}"
-#     propkey="${envname#UNIFI_SYSPROP_}"
-#     propkey="${propkey//__/.}"
-#     log "Setting system.properties (env override): ${propkey}=${envvalue}"
-#     set_property "$propkey" "$envvalue"
-# done < <(env | grep '^UNIFI_SYSPROP_')
+# MONGO_EXTERNAL=true  → use an external MongoDB (default, removes internal mongod)
+# MONGO_EXTERNAL=false → keep the internal mongod that ships with UOS
+MONGO_EXTERNAL="${MONGO_EXTERNAL:-true}"
 
-# Remove the duplicate mongo server /usr/bin/mongod
-if [ -f "/usr/bin/mongod" ]; then
-    log "Removing duplicate /usr/bin/mongod binary"
-    rm -f /usr/bin/mongod
+if [ "$MONGO_EXTERNAL" = "true" ]; then
+    MONGO_HOST="${MONGO_HOST:-unifi-os-server-mongodb}"
+    MONGO_PORT="${MONGO_PORT:-27017}"
+    MONGO_USER="${MONGO_USER:-root}"
+    MONGO_PASS="${MONGO_PASS:-root}"
+    MONGO_TLS="${MONGO_TLS:-false}"
+    MONGO_AUTH_SOURCE="${MONGO_AUTH_SOURCE-admin}"
+
+    MONGO_URI="mongodb\\://${MONGO_USER}\\:${MONGO_PASS}@${MONGO_HOST}\\:${MONGO_PORT}"
+    MONGO_PARAMS="tls\\=${MONGO_TLS}"
+    if [ -n "${MONGO_AUTH_SOURCE}" ]; then
+        MONGO_PARAMS="${MONGO_PARAMS}&authSource\\=${MONGO_AUTH_SOURCE}"
+    fi
+
+    log "External MongoDB: ${MONGO_HOST}:${MONGO_PORT}"
+    set_property "db.mongo.local" "false"
+    set_property "db.mongo.uri" "${MONGO_URI}/ace?${MONGO_PARAMS}"
+    set_property "statdb.mongo.uri" "${MONGO_URI}/ace_stat?${MONGO_PARAMS}"
+
+    if [ -f "/usr/bin/mongod" ]; then
+        log "Removing internal mongod binary"
+        rm -f /usr/bin/mongod
+    fi
+else
+    log "Using internal MongoDB"
+    set_property "db.mongo.local" "true"
 fi
 
 # Inject localhost bypass (port 7443 → controller on 8081, skipping UOS SSO).
