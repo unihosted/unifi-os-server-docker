@@ -1,4 +1,4 @@
-name: Extract UniFi OS Server base image and build Docker image
+name: Build UniFi OS Server Docker image
 
 on:
   workflow_dispatch:
@@ -24,7 +24,6 @@ on:
         required: true
         default: "true"
 
-  # Build when a version tag is pushed (e.g., v4.3.6, v5.0.6)
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
@@ -38,35 +37,27 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  # Determine which version to build based on the tag
   matrix:
     runs-on: ubuntu-latest
     outputs:
       versions: ${{ steps.set-matrix.outputs.versions }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Determine version to build
         id: set-matrix
         shell: bash
         run: |
           set -euo pipefail
 
-          # Extract version from git tag (e.g., refs/tags/v4.3.6 -> 4.3.6)
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             TAG_VERSION="${GITHUB_REF#refs/tags/v}"
             echo "Tag trigger detected: building version $TAG_VERSION"
             VERSIONS="[\"$TAG_VERSION\"]"
           else
-            # workflow_dispatch - use input version
             INPUT_VERSION="${{ inputs.uos_server_version || '5.0.6' }}"
             echo "Workflow dispatch: building version $INPUT_VERSION"
             VERSIONS="[\"$INPUT_VERSION\"]"
           fi
 
-          echo "Found versions: $VERSIONS"
-          # Use multiline syntax for JSON output
           {
             echo 'versions<<EOF'
             echo "$VERSIONS"
@@ -93,9 +84,7 @@ jobs:
 
           VERSION="${{ matrix.version }}"
 
-          # workflow_dispatch inputs may be empty on tag triggers, so set defaults
           INSTALLER_URL="${{ inputs.installer_url || '' }}"
-          # Map known versions to their default URLs (can be overridden via input)
           declare -A VERSION_URLS=(
             ["4.3.6"]="https://fw-download.ubnt.com/data/unifi-os-server/2f3a-linux-x64-4.3.6-be3b4ae0-6bcd-435d-b893-e93da668b9d0.6-x64"
             ["5.0.6"]="https://fw-download.ubnt.com/data/unifi-os-server/1856-linux-x64-5.0.6-33f4990f-6c68-4e72-9d9c-477496c22450.6-x64"
@@ -103,95 +92,20 @@ jobs:
           if [[ -z "$INSTALLER_URL" && -n "${VERSION_URLS[$VERSION]:-}" ]]; then
             INSTALLER_URL="${VERSION_URLS[$VERSION]}"
           fi
-          # Fallback if still empty
           [[ -n "$INSTALLER_URL" ]] || INSTALLER_URL="https://fw-download.ubnt.com/data/unifi-os-server/1856-linux-x64-5.0.6-33f4990f-6c68-4e72-9d9c-477496c22450.6-x64"
 
           FIRMWARE_PLATFORM="${{ inputs.firmware_platform || 'linux-x64' }}"
-          IMAGE_NAME="${{ inputs.image_name || 'unifi-os-server-docker'}}"
+          IMAGE_NAME="${{ inputs.image_name || 'unifi-os-server-docker' }}"
           PUSH="${{ inputs.push || 'true' }}"
 
           OWNER_LC="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           GHCR_IMAGE="${{ env.REGISTRY }}/${OWNER_LC}/${IMAGE_NAME}"
-          GHCR_BASE_IMAGE="${{ env.REGISTRY }}/${OWNER_LC}/${IMAGE_NAME}-base"
 
           echo "installer_url=$INSTALLER_URL" >> "$GITHUB_OUTPUT"
           echo "uos_server_version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "firmware_platform=$FIRMWARE_PLATFORM" >> "$GITHUB_OUTPUT"
-          echo "image_name=$IMAGE_NAME" >> "$GITHUB_OUTPUT"
           echo "push=$PUSH" >> "$GITHUB_OUTPUT"
           echo "ghcr_image=$GHCR_IMAGE" >> "$GITHUB_OUTPUT"
-          echo "ghcr_base_image=$GHCR_BASE_IMAGE" >> "$GITHUB_OUTPUT"
-
-      - name: Install dependencies (binwalk + skopeo)
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            binwalk \
-            skopeo \
-            jq \
-            p7zip-full \
-            tar \
-            xz-utils \
-            gzip \
-            ca-certificates
-
-      - name: Download UniFi OS Server installer binary
-        shell: bash
-        run: |
-          set -euo pipefail
-          url="${{ steps.vars.outputs.installer_url }}"
-          echo "Downloading: $url"
-          curl -fL --retry 5 --retry-delay 2 -o uos-installer.bin "$url"
-          chmod +x uos-installer.bin
-          ls -lah uos-installer.bin
-
-      - name: Extract embedded image.tar with binwalk
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # Needs root for extraction in many environments.
-          sudo binwalk --run-as=root -e uos-installer.bin
-
-          IMAGE_TAR="$(find . -type f -name 'image.tar' | head -n 1 || true)"
-          if [[ -z "${IMAGE_TAR}" ]]; then
-            echo "ERROR: image.tar not found after binwalk extraction."
-            find . -maxdepth 4 -type d -print
-            exit 1
-          fi
-
-          echo "Found image.tar at: ${IMAGE_TAR}"
-          echo "IMAGE_TAR=${IMAGE_TAR}" >> "$GITHUB_ENV"
-
-      - name: Convert extracted OCI image.tar -> docker-archive (no podman)
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf oci
-          mkdir -p oci
-          tar -xf "${IMAGE_TAR}" -C oci
-
-          # Convert OCI layout -> docker archive, tagging inside the archive as uosserver:base
-          skopeo copy \
-            oci:oci \
-            docker-archive:base-docker.tar:uosserver:base
-
-          ls -lah base-docker.tar
-
-      - name: Load base image into Docker
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker load -i base-docker.tar
-          # Ensure the tag exists as expected
-          docker image inspect uosserver:base >/dev/null
-          docker images | head
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
 
       - name: Login to GHCR
         if: steps.vars.outputs.push == 'true'
@@ -201,48 +115,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push base image to GHCR
-        if: steps.vars.outputs.push == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          GHCR_BASE_IMAGE="${{ steps.vars.outputs.ghcr_base_image }}"
-          UOS_SERVER_VERSION="${{ steps.vars.outputs.uos_server_version }}"
-
-          docker tag uosserver:base "${GHCR_BASE_IMAGE}:${UOS_SERVER_VERSION}"
-          docker tag uosserver:base "${GHCR_BASE_IMAGE}:latest"
-          docker push "${GHCR_BASE_IMAGE}:${UOS_SERVER_VERSION}"
-          docker push "${GHCR_BASE_IMAGE}:latest"
-
-      - name: Build (and optionally push) final image
+      - name: Build image
         shell: bash
         run: |
           set -euo pipefail
 
           GHCR_IMAGE="${{ steps.vars.outputs.ghcr_image }}"
-          UOS_SERVER_VERSION="${{ steps.vars.outputs.uos_server_version }}"
-          FIRMWARE_PLATFORM="${{ steps.vars.outputs.firmware_platform }}"
-
-          TAG1="${GHCR_IMAGE}:${UOS_SERVER_VERSION}"
-          TAG2="${GHCR_IMAGE}:latest"
+          VERSION="${{ steps.vars.outputs.uos_server_version }}"
 
           docker build \
-              --build-arg UOS_SERVER_VERSION="${UOS_SERVER_VERSION}" \
-              --build-arg FIRMWARE_PLATFORM="${FIRMWARE_PLATFORM}" \
-              -t "${TAG1}" \
-              -t "${TAG2}" \
-              .
+            --build-arg INSTALLER_URL="${{ steps.vars.outputs.installer_url }}" \
+            --build-arg UOS_SERVER_VERSION="$VERSION" \
+            --build-arg FIRMWARE_PLATFORM="${{ steps.vars.outputs.firmware_platform }}" \
+            -t "${GHCR_IMAGE}:${VERSION}" \
+            -t "${GHCR_IMAGE}:latest" \
+            .
 
-          if [[ "${{ steps.vars.outputs.push }}" == "true" ]]; then
-              docker push "${TAG1}"
-              docker push "${TAG2}"
-          fi
+      - name: Push image
+        if: steps.vars.outputs.push == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GHCR_IMAGE="${{ steps.vars.outputs.ghcr_image }}"
+          VERSION="${{ steps.vars.outputs.uos_server_version }}"
+
+          docker push "${GHCR_IMAGE}:${VERSION}"
+          docker push "${GHCR_IMAGE}:latest"
 
       - name: Summary
         shell: bash
         run: |
           echo "Version: ${{ matrix.version }}"
-          echo "Base image: ${{ steps.vars.outputs.ghcr_base_image }}:${{ steps.vars.outputs.uos_server_version }}"
-          echo "Final image: ${{ steps.vars.outputs.ghcr_image }}:${{ steps.vars.outputs.uos_server_version }}"
+          echo "Image: ${{ steps.vars.outputs.ghcr_image }}:${{ steps.vars.outputs.uos_server_version }}"
           echo "Push: ${{ steps.vars.outputs.push }}"

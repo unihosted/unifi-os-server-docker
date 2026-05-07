@@ -1,27 +1,72 @@
-# This is a template Dockerfile used when no version-specific Dockerfile exists.
-# The workflow will look for a version-specific Dockerfile in versions/{VERSION}/ first.
-#
-# To customize for a specific UniFi OS version:
-# 1. Create versions/{VERSION}/ directory (e.g., versions/5.0.6/)
-# 2. Copy this file and customize as needed
-# 3. Add any version-specific uos-entrypoint.sh and site-localhost-bypass.conf
+# syntax=docker/dockerfile:1
 
-# The workflow loads the extracted base image as: uosserver:base
-FROM uosserver:base
+# Self-contained build: downloads the installer, extracts the embedded OCI
+# image with binwalk, flattens its layers into a rootfs, and layers the
+# entrypoint on top.  No pre-built base image required.
+
+# ---------------------------------------------------------------------------
+# Stage 1 – extract the UniFi OS Server rootfs from the installer binary
+# ---------------------------------------------------------------------------
+FROM ubuntu:22.04 AS extractor
+
+ARG INSTALLER_URL="https://fw-download.ubnt.com/data/unifi-os-server/1856-linux-x64-5.0.6-33f4990f-6c68-4e72-9d9c-477496c22450.6-x64"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        binwalk jq p7zip-full curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+RUN curl -fL --retry 5 --retry-delay 2 -o installer.bin "$INSTALLER_URL"
+
+RUN binwalk --run-as=root -e installer.bin
+
+RUN <<'EXTRACT'
+set -eo pipefail
+
+IMAGE_TAR=$(find /build -type f -name 'image.tar' -print -quit)
+[ -n "$IMAGE_TAR" ] || { echo "image.tar not found after extraction"; exit 1; }
+
+mkdir oci
+tar xf "$IMAGE_TAR" -C oci/
+
+MANIFEST=$(jq -r '.manifests[0].digest' oci/index.json | cut -d: -f2)
+
+mkdir /rootfs
+jq -r '.layers[].digest' "oci/blobs/sha256/$MANIFEST" | cut -d: -f2 | \
+while read -r layer; do
+    echo "Extracting layer $layer"
+    tar xf "oci/blobs/sha256/$layer" -C /rootfs
+
+    # OCI whiteout markers
+    find /rootfs -name '.wh.*' 2>/dev/null | while read -r wh; do
+        base=$(basename "$wh"); dir=$(dirname "$wh")
+        if [ "$base" = ".wh..wh..opq" ]; then
+            find "$dir" -mindepth 1 -maxdepth 1 ! -name '.wh..wh..opq' -exec rm -rf {} +
+        else
+            rm -rf "$dir/${base#.wh.}"
+        fi
+        rm -f "$wh"
+    done
+done
+EXTRACT
+
+COPY uos-entrypoint.sh /rootfs/root/uos-entrypoint.sh
+COPY site-localhost-bypass.conf /rootfs/root/site-localhost-bypass.conf
+RUN chmod +x /rootfs/root/uos-entrypoint.sh
+
+# ---------------------------------------------------------------------------
+# Stage 2 – final image from the extracted rootfs
+# ---------------------------------------------------------------------------
+FROM scratch
+
+COPY --from=extractor /rootfs /
 
 ARG UOS_SERVER_VERSION
 ARG FIRMWARE_PLATFORM
+ENV UOS_SERVER_VERSION="${UOS_SERVER_VERSION}" \
+    FIRMWARE_PLATFORM="${FIRMWARE_PLATFORM}"
 
-# Optional: expose these as env so your entrypoint / runtime can use them
-ENV UOS_SERVER_VERSION="${UOS_SERVER_VERSION}"
-ENV FIRMWARE_PLATFORM="${FIRMWARE_PLATFORM}"
+STOPSIGNAL SIGRTMIN+3
 
-# Copy your entrypoint script and localhost bypass config into the image
-COPY uos-entrypoint.sh /root/uos-entrypoint.sh
-COPY site-localhost-bypass.conf /root/site-localhost-bypass.conf
-
-# Make sure it's executable
-RUN chmod +x /root/uos-entrypoint.sh
-
-# If your entrypoint expects bash, this is usually safe
 ENTRYPOINT ["/root/uos-entrypoint.sh"]
