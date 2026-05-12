@@ -105,14 +105,19 @@ MONGO_INTERNAL="${MONGO_INTERNAL:-false}"
 if [ "$MONGO_INTERNAL" = "false" ]; then
     MONGO_HOST="${MONGO_HOST:-unifi-os-server-mongodb}"
     MONGO_PORT="${MONGO_PORT:-27017}"
-    MONGO_USER="${MONGO_USER:-root}"
-    MONGO_PASS="${MONGO_PASS:-root}"
+    MONGO_USER="${MONGO_USER:-}"
+    MONGO_PASS="${MONGO_PASS:-}"
     MONGO_TLS="${MONGO_TLS:-false}"
     MONGO_AUTH_SOURCE="${MONGO_AUTH_SOURCE-admin}"
 
-    MONGO_URI="mongodb\\://${MONGO_USER}\\:${MONGO_PASS}@${MONGO_HOST}\\:${MONGO_PORT}"
+    if [ -n "${MONGO_USER}" ] && [ -n "${MONGO_PASS}" ]; then
+        MONGO_URI="mongodb\\://${MONGO_USER}\\:${MONGO_PASS}@${MONGO_HOST}\\:${MONGO_PORT}"
+    else
+        MONGO_URI="mongodb\\://${MONGO_HOST}\\:${MONGO_PORT}"
+    fi
+
     MONGO_PARAMS="tls\\=${MONGO_TLS}"
-    if [ -n "${MONGO_AUTH_SOURCE}" ]; then
+    if [ -n "${MONGO_USER}" ] && [ -n "${MONGO_AUTH_SOURCE}" ]; then
         MONGO_PARAMS="${MONGO_PARAMS}&authSource\\=${MONGO_AUTH_SOURCE}"
     fi
 
@@ -131,20 +136,17 @@ else
 fi
 
 # EXPOSE_NETWORK_APP=true → inject nginx bypass on port 7443 directly to the
-# Network Application (port 8081), skipping UOS SSO.  A persistent watcher
-# re-injects the config whenever UOS regenerates its nginx directory.
+# Network Application (port 8081), skipping UOS SSO.  Patched into the
+# unifi-core pre-start hook so it survives the directory wipe on every restart.
 EXPOSE_NETWORK_APP="${EXPOSE_NETWORK_APP:-false}"
 
 if [ "$EXPOSE_NETWORK_APP" = "true" ]; then
-(
-    BYPASS_SRC="/root/site-localhost-bypass.conf"
-    CONFIG_DIR="/usr/share/unifi-core/http"
-    CONFIG_FILE="${CONFIG_DIR}/site-localhost-bypass.conf"
-
-    mkdir -p "$CONFIG_DIR"
-    cp "$BYPASS_SRC" "$CONFIG_FILE"
-    log "Network App bypass: installed to $CONFIG_FILE"
-) &
+    PRE_START="/usr/share/unifi-core/app/hooks/pre-start"
+    INJECT='cp /root/site-localhost-bypass.conf /data/unifi-core/config/http/site-localhost-bypass.conf'
+    if ! grep -qF "$INJECT" "$PRE_START" 2>/dev/null; then
+        echo "$INJECT" >> "$PRE_START"
+        log "Network App bypass: patched into $PRE_START"
+    fi
 fi
 
 # Expose PostgreSQL on all interfaces so Docker port mapping can reach it.

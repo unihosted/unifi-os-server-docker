@@ -9,7 +9,9 @@
 # ---------------------------------------------------------------------------
 FROM ubuntu:22.04 AS extractor
 
-ARG INSTALLER_URL="https://fw-download.ubnt.com/data/unifi-os-server/1856-linux-x64-5.0.6-33f4990f-6c68-4e72-9d9c-477496c22450.6-x64"
+ARG TARGETARCH
+ARG INSTALLER_URL_AMD64="https://fw-download.ubnt.com/data/unifi-os-server/1856-linux-x64-5.0.6-33f4990f-6c68-4e72-9d9c-477496c22450.6-x64"
+ARG INSTALLER_URL_ARM64="https://fw-download.ubnt.com/data/unifi-os-server/df5b-linux-arm64-5.0.6-f35e944c-f4b6-4190-93a8-be61b96c58f4.6-arm64"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         binwalk jq p7zip-full curl ca-certificates \
@@ -17,7 +19,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-RUN curl -fL --retry 5 --retry-delay 2 -o installer.bin "$INSTALLER_URL"
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+      URL="$INSTALLER_URL_ARM64"; \
+    else \
+      URL="$INSTALLER_URL_AMD64"; \
+    fi && \
+    [ -n "$URL" ] || { echo "No installer URL for $TARGETARCH"; exit 1; } && \
+    curl -fL --retry 5 --retry-delay 2 -o installer.bin "$URL"
 
 RUN binwalk --run-as=root -e installer.bin
 
@@ -62,8 +70,8 @@ FROM scratch
 
 COPY --from=extractor /rootfs /
 
-ARG UOS_SERVER_VERSION
-ARG FIRMWARE_PLATFORM
+ARG UOS_SERVER_VERSION="5.0.6"
+ARG FIRMWARE_PLATFORM="linux-custom"
 ENV UOS_SERVER_VERSION="${UOS_SERVER_VERSION}" \
     FIRMWARE_PLATFORM="${FIRMWARE_PLATFORM}"
 

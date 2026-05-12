@@ -22,6 +22,7 @@ This repository uses **git tags** to manage different UniFi OS Server versions. 
    ```
 
 The GitHub Actions workflow will automatically:
+
 - Extract the version from the tag (e.g., `v5.0.6` → `5.0.6`)
 - Download the UniFi OS Server installer
 - Extract the base image
@@ -41,6 +42,7 @@ The GitHub Actions workflow will automatically:
 To add support for a new UniFi OS version (e.g., 6.0.0):
 
 1. Update the installer URL mapping in `.github/workflows/extract-image.yml`:
+
    ```yaml
    declare -A VERSION_URLS=(
      ["4.3.6"]="https://fw-download.ubnt.com/data/unifi-os-server/..."
@@ -52,6 +54,7 @@ To add support for a new UniFi OS version (e.g., 6.0.0):
 2. Modify `Dockerfile`, `uos-entrypoint.sh`, or other files if the new version requires changes
 
 3. Commit and push:
+
    ```bash
    git add .
    git commit -m "Add support for UniFi OS 6.0.0"
@@ -88,6 +91,7 @@ ghcr.io/unihosted/unifi-os-server-docker:latest
 ```
 
 Example:
+
 - `ghcr.io/unihosted/unifi-os-server-docker:5.0.6`
 - `ghcr.io/unihosted/unifi-os-server-docker:latest` (always points to the most recent build)
 

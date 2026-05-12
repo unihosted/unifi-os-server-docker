@@ -1,10 +1,4 @@
-# Runtime-generated data (populated by docker compose up)
-docker/persistent/
-docker/var-log/
-docker/data/
-docker/srv/
-docker/var-lib-unifi/
-docker/var-lib-mongodb/
+docker/
 
 # RabbitMQ TLS certificates and private keys
 docker/etc-rabbitmq-ssl/

@@ -1,69 +1,64 @@
 services:
   unifi-os-server:
     container_name: unifi-os-server
-    image: ghcr.io/unihosted/unifi-os-server-docker:latest
-    platform: linux/amd64
+    build: .
     privileged: true
     cgroup: host
-    restart: unless-stopped
-    pull_policy: always
+    # restart: unless-stopped
     cap_add:
       - NET_RAW
       - NET_ADMIN
     ports:
-      - "3478:3478/udp"
-      - "5514:5514/udp"
-      - "11443:443"
+      - "11443:443" # UniFi Web UI (HTTPS)
+      - "8443:8443" # UniFi Controller API
+      - "8444:8444" # UniFi Controller (alternate)
+      - "8080:8080" # HTTP inform / redirect
+      - "8880:8880" # Guest portal (HTTP)
+      - "8881:8881" # Guest portal (HTTPS)
+      - "8882:8882" # Guest portal (alternate)
+      - "6789:6789" # Speed test
+      - "11084:11084" # Remote adoption
+      - "5671:5671" # AMQP (RabbitMQ)
+      - "9543:9543" # Internal service
+
+      - "3478:3478/udp" # STUN
+      - "5514:5514/udp" # Syslog
+      - "10003:10003/udp" # UniFi discovery
+
       - "127.0.0.1:7443:7443"
       - "127.0.0.1:5432:5432"
-      - "6789:6789"
-      - "8080:8080"
-      - "8880:8880"
-      - "11084:11084"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "host.containers.internal:host-gateway"
     volumes:
-      - ./volume:/var/lib/uosserver
-      - ./volume:/var/lib/unifi
+      - ./docker/uos:/var/lib/uosserver
+      - ./docker/uos:/var/lib/unifi
+      - ./docker/data/:/data
     tmpfs:
       - /run:exec
       - /run/lock
       - /tmp:exec
       - /var/lib/journal
       - /var/opt/unifi/tmp:size=64m
+      - /data/unifi-core/config/http
+    networks:
+      - unifi-os
     depends_on:
       - unifi-network-mongodb
     environment:
       TZ: Europe/Amsterdam
       UOS_SYSTEM_IP: "127.0.0.1"
-      MONGO_HOST: "127.0.0.1"
-      MONGO_PORT: "27017"
-      MONGO_USER: root
-      MONGO_PASS: root
-  vector:
-    container_name: vector
-    image: timberio/vector:latest-alpine
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./vector.yaml:/etc/vector/vector.yaml:ro
-    depends_on:
-      - unifi-os-server
+      EXPOSE_NETWORK_APP: "true"
 
   unifi-network-mongodb:
     container_name: unifi-os-server-mongodb
     image: mongo:4.4
-    restart: unless-stopped
     networks:
       - unifi-os
     volumes:
-      - mongodb-data:/data/db
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: root
+      - ./docker/mongodb:/data/db
     ports:
       - "27017:27017"
-
-volumes:
-  mongodb-data:
 
 networks:
   unifi-os:

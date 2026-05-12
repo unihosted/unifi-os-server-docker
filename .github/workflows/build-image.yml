@@ -1,20 +1,24 @@
-name: Build UniFi OS Server Docker image
+name: Build and publish UniFi OS Server Docker image
 
 on:
   workflow_dispatch:
     inputs:
-      installer_url:
-        description: "Direct fw-download.ubnt.com URL to the UniFi OS Server Linux installer"
-        required: true
-        default: "https://fw-download.ubnt.com/data/unifi-os-server/1856-linux-x64-5.0.6-33f4990f-6c68-4e72-9d9c-477496c22450.6-x64"
+      installer_url_amd64:
+        description: "fw-download.ubnt.com URL for the linux-x64 installer"
+        required: false
+        default: ""
+      installer_url_arm64:
+        description: "fw-download.ubnt.com URL for the linux-arm64 installer"
+        required: false
+        default: ""
       uos_server_version:
         description: "UniFi OS Server version (for tagging)"
         required: true
         default: "5.0.6"
-      firmware_platform:
-        description: "Value written to /usr/lib/platform by entrypoint"
+      platforms:
+        description: "Comma-separated target platforms"
         required: true
-        default: "linux-x64"
+        default: "linux/amd64,linux/arm64"
       image_name:
         description: "Final image name (without registry). Example: unifi-os-server-docker"
         required: true
@@ -84,26 +88,30 @@ jobs:
 
           VERSION="${{ matrix.version }}"
 
-          INSTALLER_URL="${{ inputs.installer_url || '' }}"
-          declare -A VERSION_URLS=(
+          declare -A VERSION_URLS_AMD64=(
             ["4.3.6"]="https://fw-download.ubnt.com/data/unifi-os-server/2f3a-linux-x64-4.3.6-be3b4ae0-6bcd-435d-b893-e93da668b9d0.6-x64"
             ["5.0.6"]="https://fw-download.ubnt.com/data/unifi-os-server/1856-linux-x64-5.0.6-33f4990f-6c68-4e72-9d9c-477496c22450.6-x64"
           )
-          if [[ -z "$INSTALLER_URL" && -n "${VERSION_URLS[$VERSION]:-}" ]]; then
-            INSTALLER_URL="${VERSION_URLS[$VERSION]}"
-          fi
-          [[ -n "$INSTALLER_URL" ]] || INSTALLER_URL="https://fw-download.ubnt.com/data/unifi-os-server/1856-linux-x64-5.0.6-33f4990f-6c68-4e72-9d9c-477496c22450.6-x64"
+          declare -A VERSION_URLS_ARM64=(
+            ["5.0.6"]="https://fw-download.ubnt.com/data/unifi-os-server/df5b-linux-arm64-5.0.6-f35e944c-f4b6-4190-93a8-be61b96c58f4.6-arm64"
+          )
 
-          FIRMWARE_PLATFORM="${{ inputs.firmware_platform || 'linux-x64' }}"
+          URL_AMD64="${{ inputs.installer_url_amd64 || '' }}"
+          URL_ARM64="${{ inputs.installer_url_arm64 || '' }}"
+          [[ -n "$URL_AMD64" ]] || URL_AMD64="${VERSION_URLS_AMD64[$VERSION]:-}"
+          [[ -n "$URL_ARM64" ]] || URL_ARM64="${VERSION_URLS_ARM64[$VERSION]:-}"
+
+          PLATFORMS="${{ inputs.platforms || 'linux/amd64,linux/arm64' }}"
           IMAGE_NAME="${{ inputs.image_name || 'unifi-os-server-docker' }}"
           PUSH="${{ inputs.push || 'true' }}"
 
           OWNER_LC="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           GHCR_IMAGE="${{ env.REGISTRY }}/${OWNER_LC}/${IMAGE_NAME}"
 
-          echo "installer_url=$INSTALLER_URL" >> "$GITHUB_OUTPUT"
+          echo "installer_url_amd64=$URL_AMD64" >> "$GITHUB_OUTPUT"
+          echo "installer_url_arm64=$URL_ARM64" >> "$GITHUB_OUTPUT"
           echo "uos_server_version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "firmware_platform=$FIRMWARE_PLATFORM" >> "$GITHUB_OUTPUT"
+          echo "platforms=$PLATFORMS" >> "$GITHUB_OUTPUT"
           echo "push=$PUSH" >> "$GITHUB_OUTPUT"
           echo "ghcr_image=$GHCR_IMAGE" >> "$GITHUB_OUTPUT"
 
@@ -115,37 +123,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build image
-        shell: bash
-        run: |
-          set -euo pipefail
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-          GHCR_IMAGE="${{ steps.vars.outputs.ghcr_image }}"
-          VERSION="${{ steps.vars.outputs.uos_server_version }}"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-          docker build \
-            --build-arg INSTALLER_URL="${{ steps.vars.outputs.installer_url }}" \
-            --build-arg UOS_SERVER_VERSION="$VERSION" \
-            --build-arg FIRMWARE_PLATFORM="${{ steps.vars.outputs.firmware_platform }}" \
-            -t "${GHCR_IMAGE}:${VERSION}" \
-            -t "${GHCR_IMAGE}:latest" \
-            .
-
-      - name: Push image
-        if: steps.vars.outputs.push == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          GHCR_IMAGE="${{ steps.vars.outputs.ghcr_image }}"
-          VERSION="${{ steps.vars.outputs.uos_server_version }}"
-
-          docker push "${GHCR_IMAGE}:${VERSION}"
-          docker push "${GHCR_IMAGE}:latest"
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ steps.vars.outputs.platforms }}
+          push: ${{ steps.vars.outputs.push == 'true' }}
+          tags: |
+            ${{ steps.vars.outputs.ghcr_image }}:${{ steps.vars.outputs.uos_server_version }}
+            ${{ steps.vars.outputs.ghcr_image }}:latest
+          build-args: |
+            INSTALLER_URL_AMD64=${{ steps.vars.outputs.installer_url_amd64 }}
+            INSTALLER_URL_ARM64=${{ steps.vars.outputs.installer_url_arm64 }}
+            UOS_SERVER_VERSION=${{ steps.vars.outputs.uos_server_version }}
 
       - name: Summary
         shell: bash
         run: |
           echo "Version: ${{ matrix.version }}"
           echo "Image: ${{ steps.vars.outputs.ghcr_image }}:${{ steps.vars.outputs.uos_server_version }}"
+          echo "Platforms: ${{ steps.vars.outputs.platforms }}"
           echo "Push: ${{ steps.vars.outputs.push }}"
