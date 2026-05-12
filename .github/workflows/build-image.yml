@@ -15,10 +15,6 @@ on:
         description: "UniFi OS Server version (for tagging)"
         required: true
         default: "5.0.6"
-      platforms:
-        description: "Comma-separated target platforms"
-        required: true
-        default: "linux/amd64,linux/arm64"
       image_name:
         description: "Final image name (without registry). Example: unifi-os-server-docker"
         required: true
@@ -44,49 +40,19 @@ jobs:
   matrix:
     runs-on: ubuntu-latest
     outputs:
-      versions: ${{ steps.set-matrix.outputs.versions }}
+      include: ${{ steps.set-matrix.outputs.include }}
     steps:
-      - name: Determine version to build
+      - name: Build platform matrix
         id: set-matrix
         shell: bash
         run: |
           set -euo pipefail
 
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            TAG_VERSION="${GITHUB_REF#refs/tags/v}"
-            echo "Tag trigger detected: building version $TAG_VERSION"
-            VERSIONS="[\"$TAG_VERSION\"]"
+            VERSION="${GITHUB_REF#refs/tags/v}"
           else
-            INPUT_VERSION="${{ inputs.uos_server_version || '5.0.6' }}"
-            echo "Workflow dispatch: building version $INPUT_VERSION"
-            VERSIONS="[\"$INPUT_VERSION\"]"
+            VERSION="${{ inputs.uos_server_version || '5.0.6' }}"
           fi
-
-          {
-            echo 'versions<<EOF'
-            echo "$VERSIONS"
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
-
-  build:
-    needs: matrix
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        version: ${{ fromJson(needs.matrix.outputs.versions) }}
-      fail-fast: false
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set variables for version ${{ matrix.version }}
-        id: vars
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          VERSION="${{ matrix.version }}"
 
           declare -A VERSION_URLS_AMD64=(
             ["4.3.6"]="https://fw-download.ubnt.com/data/unifi-os-server/2f3a-linux-x64-4.3.6-be3b4ae0-6bcd-435d-b893-e93da668b9d0.6-x64"
@@ -101,19 +67,43 @@ jobs:
           [[ -n "$URL_AMD64" ]] || URL_AMD64="${VERSION_URLS_AMD64[$VERSION]:-}"
           [[ -n "$URL_ARM64" ]] || URL_ARM64="${VERSION_URLS_ARM64[$VERSION]:-}"
 
-          PLATFORMS="${{ inputs.platforms || 'linux/amd64,linux/arm64' }}"
-          IMAGE_NAME="${{ inputs.image_name || 'unifi-os-server-docker' }}"
-          PUSH="${{ inputs.push || 'true' }}"
+          INCLUDES="[]"
+          if [[ -n "$URL_AMD64" ]]; then
+            INCLUDES=$(echo "$INCLUDES" | jq -c --arg v "$VERSION" --arg u "$URL_AMD64" \
+              '. + [{"version": $v, "platform": "linux/amd64", "arch_suffix": "amd64", "installer_url": $u}]')
+          fi
+          if [[ -n "$URL_ARM64" ]]; then
+            INCLUDES=$(echo "$INCLUDES" | jq -c --arg v "$VERSION" --arg u "$URL_ARM64" \
+              '. + [{"version": $v, "platform": "linux/arm64", "arch_suffix": "arm64", "installer_url": $u}]')
+          fi
 
+          echo "include=$INCLUDES" >> "$GITHUB_OUTPUT"
+          echo "Building $VERSION for: $(echo "$INCLUDES" | jq -r '.[].platform' | tr '\n' ' ')"
+
+  build:
+    needs: matrix
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include: ${{ fromJson(needs.matrix.outputs.include) }}
+      fail-fast: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set variables
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_NAME="${{ inputs.image_name || 'unifi-os-server-docker' }}"
           OWNER_LC="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           GHCR_IMAGE="${{ env.REGISTRY }}/${OWNER_LC}/${IMAGE_NAME}"
+          PUSH="${{ inputs.push || 'true' }}"
 
-          echo "installer_url_amd64=$URL_AMD64" >> "$GITHUB_OUTPUT"
-          echo "installer_url_arm64=$URL_ARM64" >> "$GITHUB_OUTPUT"
-          echo "uos_server_version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "platforms=$PLATFORMS" >> "$GITHUB_OUTPUT"
-          echo "push=$PUSH" >> "$GITHUB_OUTPUT"
           echo "ghcr_image=$GHCR_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "push=$PUSH" >> "$GITHUB_OUTPUT"
 
       - name: Login to GHCR
         if: steps.vars.outputs.push == 'true'
@@ -124,29 +114,76 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up QEMU
+        if: matrix.platform != 'linux/amd64'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push image
+      - name: Build and push (${{ matrix.platform }})
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: ${{ steps.vars.outputs.platforms }}
+          platforms: ${{ matrix.platform }}
           push: ${{ steps.vars.outputs.push == 'true' }}
           tags: |
-            ${{ steps.vars.outputs.ghcr_image }}:${{ steps.vars.outputs.uos_server_version }}
-            ${{ steps.vars.outputs.ghcr_image }}:latest
+            ${{ steps.vars.outputs.ghcr_image }}:${{ matrix.version }}-${{ matrix.arch_suffix }}
           build-args: |
-            INSTALLER_URL_AMD64=${{ steps.vars.outputs.installer_url_amd64 }}
-            INSTALLER_URL_ARM64=${{ steps.vars.outputs.installer_url_arm64 }}
-            UOS_SERVER_VERSION=${{ steps.vars.outputs.uos_server_version }}
+            INSTALLER_URL_AMD64=${{ matrix.installer_url }}
+            INSTALLER_URL_ARM64=${{ matrix.installer_url }}
+            UOS_SERVER_VERSION=${{ matrix.version }}
+          provenance: false
+
+  manifest:
+    needs: [matrix, build]
+    runs-on: ubuntu-latest
+    if: ${{ inputs.push != 'false' }}
+    steps:
+      - name: Set variables
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_NAME="${{ inputs.image_name || 'unifi-os-server-docker' }}"
+          OWNER_LC="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          echo "ghcr_image=${{ env.REGISTRY }}/${OWNER_LC}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE="${{ steps.vars.outputs.ghcr_image }}"
+          INCLUDE='${{ needs.matrix.outputs.include }}'
+
+          VERSIONS=$(echo "$INCLUDE" | jq -r '.[].version' | sort -u)
+          for VERSION in $VERSIONS; do
+            SOURCES=$(echo "$INCLUDE" | jq -r --arg v "$VERSION" \
+              '.[] | select(.version == $v) | .arch_suffix' | \
+              xargs -I{} echo "${IMAGE}:${VERSION}-{}")
+
+            echo "Creating manifest ${IMAGE}:${VERSION} from:"
+            echo "$SOURCES"
+
+            docker buildx imagetools create \
+              -t "${IMAGE}:${VERSION}" \
+              -t "${IMAGE}:latest" \
+              $SOURCES
+          done
 
       - name: Summary
         shell: bash
         run: |
-          echo "Version: ${{ matrix.version }}"
-          echo "Image: ${{ steps.vars.outputs.ghcr_image }}:${{ steps.vars.outputs.uos_server_version }}"
-          echo "Platforms: ${{ steps.vars.outputs.platforms }}"
-          echo "Push: ${{ steps.vars.outputs.push }}"
+          IMAGE="${{ steps.vars.outputs.ghcr_image }}"
+          INCLUDE='${{ needs.matrix.outputs.include }}'
+          VERSION=$(echo "$INCLUDE" | jq -r '.[0].version')
+          echo "### Published" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`${IMAGE}:${VERSION}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`${IMAGE}:latest\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Platforms: $(echo "$INCLUDE" | jq -r '.[].platform' | tr '\n' ', ')" >> "$GITHUB_STEP_SUMMARY"
