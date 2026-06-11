@@ -37,6 +37,8 @@ log "Setting UOS_SERVER_VERSION to $UOS_SERVER_VERSION"
 echo "UOSSERVER.0000000.$UOS_SERVER_VERSION.0000000.000000.0000" > /usr/lib/version
 log "Setting FIRMWARE_PLATFORM to $FIRMWARE_PLATFORM"
 echo "$FIRMWARE_PLATFORM" > /usr/lib/platform
+log "Setting PRODUCT_NAME to $PRODUCT_NAME"
+echo "$PRODUCT_NAME" > /usr/lib/product_name
 
 # Create eth0 alias if missing (requires NET_ADMIN cap & macvlan kernel module loaded on host).
 # Checks tap0 first (VPN/hypervisor envs), then falls back to the host's default-route interface.
