@@ -57,9 +57,11 @@ jobs:
           declare -A VERSION_URLS_AMD64=(
             ["4.3.6"]="https://fw-download.ubnt.com/data/unifi-os-server/2f3a-linux-x64-4.3.6-be3b4ae0-6bcd-435d-b893-e93da668b9d0.6-x64"
             ["5.0.6"]="https://fw-download.ubnt.com/data/unifi-os-server/1856-linux-x64-5.0.6-33f4990f-6c68-4e72-9d9c-477496c22450.6-x64"
+            ["5.1.15"]="https://fw-download.ubnt.com/data/unifi-os-server/24e0-linux-x64-5.1.15-926621de-c9d7-48cd-8921-a0ff3eebd3f4.15-x64"
           )
           declare -A VERSION_URLS_ARM64=(
             ["5.0.6"]="https://fw-download.ubnt.com/data/unifi-os-server/df5b-linux-arm64-5.0.6-f35e944c-f4b6-4190-93a8-be61b96c58f4.6-arm64"
+            ["5.1.15"]="https://fw-download.ubnt.com/data/unifi-os-server/adc4-linux-arm64-5.1.15-53ab1f2c-4cd5-4a5f-b750-d1aa35679b4f.15-arm64"
           )
 
           URL_AMD64="${{ inputs.installer_url_amd64 || '' }}"
