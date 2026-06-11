@@ -133,6 +133,8 @@ if [ "$MONGO_INTERNAL" = "false" ]; then
 else
     log "Using internal MongoDB"
     set_unifi_property "db.mongo.local" "true"
+    set_unifi_property "db.mongo.uri" "mongodb\\://localhost\\:27017/ace"
+    set_unifi_property "statdb.mongo.uri" "mongodb\\://localhost\\:27017/ace_stat"
 fi
 
 # EXPOSE_NETWORK_APP=true → inject nginx bypass on port 7443 directly to the
