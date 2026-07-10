@@ -1,6 +1,6 @@
 # UniFi OS Server in Docker
 
-> This repository provides a solution for running UniFi OS Server (UOS) in Docker, addressing the challenge of using Docker instead of the Podman-based containerization that is shipped by Ubiquiti. This allows users to deploy UOS on platforms with standard Docker tooling, bypassing the limitations of the official Podman setup.
+> Ubiquiti only ships the UniFi OS Server (UOS) as an OCI image embedded inside a proprietary Rust installer — you can't just pull it from a registry. This repository extracts that OCI image, adjusts it to our liking, and ships it with a compose file and config that make it fit to run in Docker. No parallel Podman setup required.
 
 ## Quick Start
 
@@ -77,13 +77,13 @@ networks:
 
 ## Why This Exists
 
-Ubiquiti ships UOS as a Podman image because Podman is the container platform they happen to use. At UniHosted we were already running everything else in Docker, so rather than maintain a parallel Podman setup just for one application, we figured out how to convert that Podman image into a Docker image. Once the pipeline worked, it seemed silly not to share it. If you're in the same boat, here it is.
+Ubiquiti ships UOS as an OCI image, but bundles it inside a proprietary installer rather than publishing it to a registry. At UniHosted we were already running everything else in Docker, so rather than maintain a parallel Podman setup just for one application, we extract the OCI image from the installer and re-package it so it runs cleanly under Docker. Once the pipeline worked, it seemed silly not to share it. If you're in the same boat, here it is.
 
 By default the internal mongod is removed and the container expects a separate MongoDB 4.4 instance (see the included `docker-compose.yaml`). Set `MONGO_INTERNAL=true` to let the UniFi Network App manage its own bundled mongod (port 27117) instead.
 
 ## How It Works
 
-One of the nice things about this project is that the build is fully transparent: nothing happens behind a curtain. We download the official Ubiquiti UOS installer, extract the embedded Podman image (which is already in OCI format), and flatten its layers into a rootfs that Docker can use. In other words, we're not distributing or re-distributing any Ubiquiti code; we're converting an image from one container format to another. Our own entrypoint is layered on top, and at runtime it configures MongoDB, wires up networking (macvlan `eth0` alias), exposes PostgreSQL, and hands off to systemd. The entire pipeline runs through the [`build-image`](.github/workflows/build-image.yml) GitHub Action, so you can inspect exactly what happens at every step.
+One of the nice things about this project is that the build is fully transparent: nothing happens behind a curtain. We download the official Ubiquiti UOS installer, extract the embedded OCI image from it, and flatten its layers into a rootfs that Docker can consume. In other words, we're not distributing or re-distributing any Ubiquiti code; we're taking an OCI image that Ubiquiti already built and making it runnable outside their installer. Our own entrypoint is layered on top, and at runtime it configures MongoDB, wires up networking (macvlan `eth0` alias), exposes PostgreSQL, and hands off to systemd. The entire pipeline runs through the [`build-image`](.github/workflows/build-image.yml) GitHub Action, so you can inspect exactly what happens at every step.
 
 ---
 
