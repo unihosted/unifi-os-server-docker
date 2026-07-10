@@ -1,17 +1,5 @@
 #!/bin/bash
-#
-# uos-entrypoint.sh — runtime configuration for the UniFi OS Server container.
-#
-# Responsibilities (in order):
-#   1. Persist / generate the UOS UUID
-#   2. Write version / platform / product metadata
-#   3. Create the eth0 macvlan alias (when missing)
-#   4. Ensure service log & data directories exist with correct ownership
-#   5. Configure MongoDB (internal vs. external) in system.properties
-#   6. Optionally inject the Network App bypass (see below)
-#   7. Expose PostgreSQL on all interfaces
-#   8. Forward journald to the Docker log stream, then start systemd
-#
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -254,4 +242,5 @@ exec 3>&1
 ) &
 
 log "Starting systemd init"
+
 exec /sbin/init

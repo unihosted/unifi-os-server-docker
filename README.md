@@ -4,40 +4,38 @@
 
 ## Quick Start
 
-Save the compose below as `docker-compose.yaml`, set `UOS_SYSTEM_IP` to your public IP, and run `docker compose up -d`. The Web UI will be at `https://localhost:443` once the container is ready. Every port and environment variable is documented inline: the compose *is* the reference.
+Save the compose below as `docker-compose.yaml`, set `UOS_SYSTEM_IP` to your public IP, and run `docker compose up -d`. The Web UI will be at `https://localhost:11443` once the container is ready. Every port and environment variable is documented inline: the compose *is* the reference.
 
 ```yaml
 services:
   unifi-os-server:
     container_name: unifi-os-server
-    image: whaamed/unifi-os-server
-    privileged: true
+    image: ghcr.io/unihosted/unifi-os-server-docker:latest
     cgroup: host
+    restart: unless-stopped
     cap_add:
       - NET_RAW
       - NET_ADMIN
     ports:
-      - "443:443"            # UniFi Web UI (HTTPS)
-      - "8443:8443"          # UniFi Controller API
-      - "8444:8444"          # UniFi Controller (alternate)
-      - "8080:8080"          # HTTP inform / redirect
-      - "8880:8880"          # Guest portal (HTTP)
-      - "8881:8881"          # Guest portal (HTTPS)
-      - "8882:8882"          # Guest portal (alternate)
-      - "6789:6789"          # Speed test
-      - "11084:11084"        # Remote adoption
-      - "5671:5671"          # AMQP (RabbitMQ)
-      - "9543:9543"          # Internal service
-      - "3478:3478/udp"      # STUN
-      - "5514:5514/udp"      # Syslog
-      - "10003:10003/udp"    # UniFi discovery (local network only)
+      - "8080:8080" # HTTP inform / redirect
+      - "8443:8443" # UniFi Controller API
+      - "8444:8444" # Secure Portal for Hotspot
+      - "8880-8882:8880-8882" # Hotspot portal redirection (HTTP)
+      - "10003:10003/udp" # UniFi discovery (Only needed on local network)
+      - "11443:443" # UniFi Web UI (HTTPS)
+      - "3478:3478/udp" # STUN used for device poking
+      - "5514:5514/udp" # Syslog
+      - "6789:6789" # Speed test
 
-      # Network App bypass: skips UOS SSO for direct controller API access.
-      # Bind to localhost ONLY; never expose publicly.
-      - "127.0.0.1:7443:7443"  # requires EXPOSE_NETWORK_APP=true
-      - "127.0.0.1:5432:5432"  # PostgreSQL (localhost only)
-
+      # Network App bypass — skips UOS SSO, direct access to the controller
+      # API on 127.0.0.1:8081.  Bind to localhost ONLY; never expose publicly.
+      - "127.0.0.1:7443:7443"
+      - "127.0.0.1:5432:5432" # PostgreSQL (localhost only)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "host.containers.internal:host-gateway"
     volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
       - ./docker/uos:/var/lib/uosserver
       - ./docker/uos:/var/lib/unifi
       - ./docker/data/:/data
@@ -49,40 +47,31 @@ services:
       - /var/opt/unifi/tmp:size=64m
       - /data/unifi-core/config/http
     networks:
-      - unifi-os
+      - unifi-os-server-network
     depends_on:
-      - unifi-network-mongodb
+      - unifi-os-server-mongodb
     environment:
-      TZ: Europe/Amsterdam            # Container timezone
-      UOS_SYSTEM_IP: "203.0.113.10"   # REQUIRED: your public IP, written to system.properties
-      UOS_UUID: ""                    # Auto-generated if left blank; persistent across restarts
-      UOS_SERVER_VERSION: "5.0.6"     # UOS version string (set at build time)
-      FIRMWARE_PLATFORM: "linux-custom" # Platform identifier (set at build time)
+      TZ: Europe/Amsterdam
+      UOS_SYSTEM_IP: "127.0.0.1"
+      # SSO bypass for the Network App (port 7443).  Used by UniHosted for
+      # debugging and direct API access.  NOT for production — the port is
+      # bound to localhost above and must stay that way.
+      EXPOSE_NETWORK_APP: "true"
 
-      EXPOSE_NETWORK_APP: "false"     # true → nginx bypass on port 7443, skips UOS SSO
+      MONGO_INTERNAL: "false" # Defaults to false → uses the external MongoDB service below.
+      # Set to "true" and remove the unifi-network-mongodb service + depends_on
+      # to let the UniFi Network App run its own mongod (port 27117).
 
-      # --- External MongoDB ---
-      # MONGO_INTERNAL=false uses the MongoDB service below.
-      # Set MONGO_INTERNAL=true to let the Network App run its own mongod
-      # (port 27117) and remove the unifi-network-mongodb service + depends_on.
-      MONGO_INTERNAL: "false"
-      MONGO_HOST: "unifi-network-mongodb" # External MongoDB hostname
-      MONGO_PORT: "27017"               # External MongoDB port
-      MONGO_USER: ""                    # MongoDB username
-      MONGO_PASS: ""                    # MongoDB password
-      MONGO_TLS: "false"                # Enable TLS for the MongoDB connection
-      MONGO_AUTH_SOURCE: "admin"        # MongoDB authentication database
-
-  unifi-network-mongodb:
+  unifi-os-server-mongodb:
     container_name: unifi-os-server-mongodb
     image: mongo:4.4
     networks:
-      - unifi-os
+      - unifi-os-server-network
     volumes:
       - ./docker/mongodb:/data/db
 
 networks:
-  unifi-os:
+  unifi-os-server-network:
 ```
 
 
