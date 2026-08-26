@@ -62,12 +62,33 @@ fi
 # 2. Version / platform / product metadata
 # ---------------------------------------------------------------------------
 
-log "Setting UOS_SERVER_VERSION to $UOS_SERVER_VERSION"
-echo "UOSSERVER.0000000.$UOS_SERVER_VERSION.0000000.000000.0000" > /usr/lib/version
+ARCH="$(dpkg --print-architecture)"
+case "$ARCH" in
+    amd64)
+        FIRMWARE_PLATFORM="linux-x64"
+        ;;
+    arm64)
+        FIRMWARE_PLATFORM="arm64"
+        ;;
+    *)
+        log "ERROR: FIRMWARE_PLATFORM not found for $ARCH"
+        exit 1
+        ;;
+esac
+
 log "Setting FIRMWARE_PLATFORM to $FIRMWARE_PLATFORM"
-echo "$FIRMWARE_PLATFORM" > /usr/lib/platform
 log "Setting PRODUCT_NAME to $PRODUCT_NAME"
+log "Setting APP_MODEL to $APP_MODEL"
+log "Setting APP_VERSION to $APP_VERSION"
+
+echo "$FIRMWARE_PLATFORM" > /usr/lib/platform
 echo "$PRODUCT_NAME" > /usr/lib/product_name
+echo "$APP_MODEL" > /usr/lib/app_model
+
+# Protect Server mounts /usr/lib/version itself.
+if [ "$APP_MODEL" != "PROTECT_SERVER" ]; then
+    echo "$APP_MODEL.0000000.$APP_VERSION.0000000.000000.0000" > /usr/lib/version
+fi
 
 # ---------------------------------------------------------------------------
 # 3. Networking — eth0 macvlan alias
