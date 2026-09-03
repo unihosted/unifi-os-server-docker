@@ -17,10 +17,6 @@ services:
       - "3478:3478/udp" # STUN used for device poking
       - "5514:5514/udp" # Syslog
       - "6789:6789" # Speed test
-
-      # Network App bypass — skips UOS SSO, direct access to the controller
-      # API on 127.0.0.1:8081.  Bind to localhost ONLY; never expose publicly.
-      - "127.0.0.1:7443:7443"
       - "127.0.0.1:5432:5432" # PostgreSQL (localhost only)
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -44,11 +40,6 @@ services:
     environment:
       TZ: Europe/Amsterdam
       UOS_SYSTEM_IP: "127.0.0.1"
-      # SSO bypass for the Network App (port 7443).  Used by UniHosted for
-      # debugging and direct API access.  NOT for production — the port is
-      # bound to localhost above and must stay that way.
-      EXPOSE_NETWORK_APP: "true"
-
       MONGO_INTERNAL: "false" # Defaults to false → uses the external MongoDB service below.
       # Set to "true" and remove the unifi-network-mongodb service + depends_on
       # to let the UniFi Network App run its own mongod (port 27117).

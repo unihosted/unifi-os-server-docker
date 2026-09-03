@@ -184,41 +184,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Network App bypass (port 7443)
-# ---------------------------------------------------------------------------
-#
-# By default the UniFi Network Application is fronted by UOS SSO — you must
-# authenticate through the UniFi OS Console before reaching the controller UI
-# or its REST API.  This makes automation and direct API access difficult.
-#
-# When EXPOSE_NETWORK_APP=true an nginx server block is injected that listens
-# on port 7443 and proxies directly to the Network App on 127.0.0.1:8081,
-# skipping SSO entirely.  UniHosted uses this for debugging and to call the
-# original UniFi Network API without going through the UOS SSO layer.
-#
-#   *** NOT FOR PRODUCTION — DO NOT EXPOSE PUBLICLY ***
-#
-# This bypass circumvents SSO authentication.  It must only be bound to
-# localhost (the docker-compose.yaml maps it as 127.0.0.1:7443:7443) and
-# never published to a public interface.  Exposing it to the network would
-# allow unauthenticated access to the Network Application.
-#
-# The injection is patched into unifi-core's pre-start hook so it survives
-# the config directory wipe that happens on every restart.
-
-EXPOSE_NETWORK_APP="${EXPOSE_NETWORK_APP:-false}"
-
-if [ "$EXPOSE_NETWORK_APP" = "true" ]; then
-    PRE_START="/usr/share/unifi-core/app/hooks/pre-start"
-    INJECT='cp /root/site-localhost-bypass.conf /data/unifi-core/config/http/site-localhost-bypass.conf'
-    if ! grep -qF "$INJECT" "$PRE_START" 2>/dev/null; then
-        echo "$INJECT" >> "$PRE_START"
-        log "Network App bypass: patched into $PRE_START"
-    fi
-fi
-
-# ---------------------------------------------------------------------------
-# 7. PostgreSQL — expose on all interfaces for Docker port mapping
+# 6. PostgreSQL — expose on all interfaces for Docker port mapping
 # ---------------------------------------------------------------------------
 
 # listen_addresses requires a restart (reload is not enough).
@@ -247,7 +213,7 @@ fi
 ) &
 
 # ---------------------------------------------------------------------------
-# 8. Journal forwarding & systemd
+# 7. Journal forwarding & systemd
 # ---------------------------------------------------------------------------
 
 # Forward journalctl to Docker log stream.

@@ -60,7 +60,6 @@ done
 EXTRACT
 
 COPY uos-entrypoint.sh /rootfs/root/uos-entrypoint.sh
-COPY site-localhost-bypass.conf /rootfs/root/site-localhost-bypass.conf
 RUN chmod +x /rootfs/root/uos-entrypoint.sh
 
 # ---------------------------------------------------------------------------
