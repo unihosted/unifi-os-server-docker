@@ -30,7 +30,7 @@ services:
       - /run:exec
       - /run/lock
       - /tmp:exec
-      - /var/lib/journal
+      - /var/log/journal
       - /var/opt/unifi/tmp:size=64m
       - /data/unifi-core/config/http
     networks:
@@ -41,8 +41,6 @@ services:
       TZ: Europe/Amsterdam
       UOS_SYSTEM_IP: "127.0.0.1"
       MONGO_INTERNAL: "false" # Defaults to false → uses the external MongoDB service below.
-      # Set to "true" and remove the unifi-network-mongodb service + depends_on
-      # to let the UniFi Network App run its own mongod (port 27117).
 
   unifi-os-server-mongodb:
     container_name: unifi-os-server-mongodb

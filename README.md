@@ -39,7 +39,7 @@ services:
       - /run:exec
       - /run/lock
       - /tmp:exec
-      - /var/lib/journal
+      - /var/log/journal
       - /var/opt/unifi/tmp:size=64m
       - /data/unifi-core/config/http
     networks:
