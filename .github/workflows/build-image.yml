@@ -62,6 +62,7 @@ jobs:
             ["5.1.21"]="https://fw-download.ubnt.com/data/unifi-os-server/f5e2-linux-x64-5.1.21-a400c9c6-8328-4634-b223-ebfcf742720a.21-x64"
             ["5.1.37"]="https://fw-download.ubnt.com/data/unifi-os-server/9aee-linux-x64-5.1.37-a88d909c-2ac0-43f8-bb22-2bff3b673cbb.37-x64"
             ["5.1.40"]="https://fw-download.ubnt.com/data/unifi-os-server/0e7e-linux-x64-5.1.40-149c6209-9218-4925-86d2-227b6b92f94d.40-x64"
+            ["5.1.42"]="https://fw-download.ubnt.com/data/unifi-os-server/5172-linux-x64-5.1.42-12e9e3cf-8f8b-4e54-928c-76b80a10c8a4.42-x64"
           )
           declare -A VERSION_URLS_ARM64=(
             ["5.0.6"]="https://fw-download.ubnt.com/data/unifi-os-server/df5b-linux-arm64-5.0.6-f35e944c-f4b6-4190-93a8-be61b96c58f4.6-arm64"
@@ -70,6 +71,7 @@ jobs:
             ["5.1.21"]="https://fw-download.ubnt.com/data/unifi-os-server/162a-linux-arm64-5.1.21-c2775845-975c-453d-88f4-f9061329b27e.21-arm64"
             ["5.1.37"]="https://fw-download.ubnt.com/data/unifi-os-server/e060-linux-arm64-5.1.37-eafe439e-ca8f-4aeb-bd82-85d2edf345ff.37-arm64"
             ["5.1.40"]="https://fw-download.ubnt.com/data/unifi-os-server/e9d4-linux-arm64-5.1.40-b56d3f74-e1eb-454d-a8e7-6d7ccf8293c8.40-arm64"
+            ["5.1.42"]="https://fw-download.ubnt.com/data/unifi-os-server/f730-linux-arm64-5.1.42-d2bca8bd-d6fc-4d20-99e5-b78235843c2f.42-arm64"
           )
 
           URL_AMD64="${{ inputs.installer_url_amd64 || '' }}"
