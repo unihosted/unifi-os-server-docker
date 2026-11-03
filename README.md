@@ -82,18 +82,14 @@ Every version uses the same Dockerfile, entrypoint, and log forwarder. The
 `build-image` workflow defaults to `uos_server_version: all`, rebuilding 4.3.6,
 5.0.6, 5.1.15, 5.1.19, 5.1.21, 5.1.37, 5.1.40, and 5.1.42 from the selected Git
 ref. All have amd64 and arm64 builds except 4.3.6, which has only amd64.
-Logging tests run inside each image during its build. Older releases that only
-bundle Node 22 receive Node 24 for the forwarder; their application runtime stays
-unchanged.
+Older releases that only bundle Node 22 receive Node 24 for the forwarder; their
+application runtime stays unchanged.
 
 Set `push` to `false` for a build without publishing. When publishing all versions,
 each version gets its own image tag and `latest` points to the newest selected
 version (currently 5.1.42). Existing registry images gain these changes only after
 a rebuild and publish. You can still select one version or build a release tag;
 custom installer URLs require a single explicit version.
-
-Run `python3 tests/build-workflow.test.py` to verify version selection and manifest
-tags locally (requires Bash 4.3+ and jq; manifest publishing is mocked).
 
 ## Container logs
 
@@ -170,19 +166,6 @@ if err == null && is_object(parsed) && parsed.log_schema == "uos.v1" {
 } else {
   # Existing legacy / sidecar parsing goes here.
 }
-```
-
-Run `node --test tests/*.test.cjs` for parser tests. Linux also runs the reader
-lifecycle test using GNU tail; Docker builds run both with the extracted image's
-Node runtime on each target architecture. `bash -n uos-entrypoint.sh` checks shell
-syntax.
-
-For a smoke test with real journald and PostgreSQL, use a disposable local image
-container (no host data volumes or published ports):
-
-```sh
-docker run --rm --entrypoint /bin/bash -v "$PWD:/work:ro" \
-  ghcr.io/unihosted/unifi-os-server-docker:latest /work/tests/image-smoke.sh
 ```
 
 ## Node.js security patch

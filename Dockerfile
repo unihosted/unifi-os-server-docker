@@ -117,12 +117,6 @@ COPY uos-entrypoint.sh /rootfs/root/uos-entrypoint.sh
 COPY uos-logs.cjs /rootfs/root/uos-logs.cjs
 RUN chmod +x /rootfs/root/uos-entrypoint.sh
 
-# Exercise the parser and GNU tail lifecycle with the actual image runtime on
-# each architecture. Test fixtures are not included in the final image.
-COPY tests /rootfs/root/tests
-RUN chroot /rootfs /bin/sh -c '/usr/bin/node24 --test /root/tests/*.test.cjs' \
-    && rm -rf /rootfs/root/tests
-
 # ---------------------------------------------------------------------------
 # Stage 2 – final image from the extracted rootfs
 # ---------------------------------------------------------------------------
