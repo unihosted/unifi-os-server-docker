@@ -78,12 +78,17 @@ case "$TARGETARCH" in
     *) echo "Unsupported Node.js architecture: $TARGETARCH" >&2; exit 1 ;;
 esac
 
-# Fail if an upstream installer changes the runtime layout or major version.
-test -f /rootfs/usr/bin/node24
+# Older UOS releases (including 4.3.6) use node22. Install node24 for the
+# log forwarder without replacing those application runtimes. If node24 is
+# already bundled, retain the patch's runtime layout and ABI checks.
 test ! -L /rootfs/usr/bin/node24
-OLD_VERSION=$(chroot /rootfs /usr/bin/node24 -p 'process.versions.node')
-test "${OLD_VERSION%%.*}" = 24
-OLD_ABI=$(chroot /rootfs /usr/bin/node24 -p 'process.versions.modules')
+OLD_ABI=""
+if [ -e /rootfs/usr/bin/node24 ]; then
+    test -f /rootfs/usr/bin/node24
+    OLD_VERSION=$(chroot /rootfs /usr/bin/node24 -p 'process.versions.node')
+    test "${OLD_VERSION%%.*}" = 24
+    OLD_ABI=$(chroot /rootfs /usr/bin/node24 -p 'process.versions.modules')
+fi
 
 ARCHIVE="node-v${VERSION}-linux-${NODE_ARCH}.tar.xz"
 curl -fL --retry 5 --retry-delay 2 -o "$ARCHIVE" "https://nodejs.org/dist/v${VERSION}/${ARCHIVE}"
@@ -96,7 +101,9 @@ install -m 0755 /build/node-patch/bin/node /rootfs/usr/bin/node24
 install -Dm 0644 /build/node-patch/LICENSE /rootfs/usr/share/doc/node24/LICENSE
 
 test "$(chroot /rootfs /usr/bin/node24 --version)" = "v${VERSION}"
-test "$(chroot /rootfs /usr/bin/node24 -p 'process.versions.modules')" = "$OLD_ABI"
+if [ -n "$OLD_ABI" ]; then
+    test "$(chroot /rootfs /usr/bin/node24 -p 'process.versions.modules')" = "$OLD_ABI"
+fi
 chroot /rootfs /usr/bin/node24 --openssl-legacy-provider -e '
     const assert = require("node:assert/strict");
     const zlib = require("node:zlib");
@@ -107,7 +114,14 @@ rm -rf /build/node-patch "$ARCHIVE"
 PATCH_NODE
 
 COPY uos-entrypoint.sh /rootfs/root/uos-entrypoint.sh
+COPY uos-logs.cjs /rootfs/root/uos-logs.cjs
 RUN chmod +x /rootfs/root/uos-entrypoint.sh
+
+# Exercise the parser and GNU tail lifecycle with the actual image runtime on
+# each architecture. Test fixtures are not included in the final image.
+COPY tests /rootfs/root/tests
+RUN chroot /rootfs /bin/sh -c '/usr/bin/node24 --test /root/tests/*.test.cjs' \
+    && rm -rf /rootfs/root/tests
 
 # ---------------------------------------------------------------------------
 # Stage 2 – final image from the extracted rootfs

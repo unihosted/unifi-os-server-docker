@@ -76,6 +76,115 @@ By default the internal mongod is removed and the container expects a separate M
 
 One of the nice things about this project is that the build is fully transparent: nothing happens behind a curtain. We download the official Ubiquiti UOS installer, extract the embedded OCI image from it, and flatten its layers into a rootfs that Docker can consume. In other words, we're not distributing or re-distributing any Ubiquiti code; we're taking an OCI image that Ubiquiti already built and making it runnable outside their installer. Our own entrypoint is layered on top, and at runtime it configures MongoDB, wires up networking (macvlan `eth0` alias), exposes PostgreSQL, and hands off to systemd. The entire pipeline runs through the [`build-image`](.github/workflows/build-image.yml) GitHub Action, so you can inspect exactly what happens at every step.
 
+## Rebuilding all supported versions
+
+Every version uses the same Dockerfile, entrypoint, and log forwarder. The
+`build-image` workflow defaults to `uos_server_version: all`, rebuilding 4.3.6,
+5.0.6, 5.1.15, 5.1.19, 5.1.21, 5.1.37, 5.1.40, and 5.1.42 from the selected Git
+ref. All have amd64 and arm64 builds except 4.3.6, which has only amd64.
+Logging tests run inside each image during its build. Older releases that only
+bundle Node 22 receive Node 24 for the forwarder; their application runtime stays
+unchanged.
+
+Set `push` to `false` for a build without publishing. When publishing all versions,
+each version gets its own image tag and `latest` points to the newest selected
+version (currently 5.1.42). Existing registry images gain these changes only after
+a rebuild and publish. You can still select one version or build a release tag;
+custom installer URLs require a single explicit version.
+
+Run `python3 tests/build-workflow.test.py` to verify version selection and manifest
+tags locally (requires Bash 4.3+ and jq; manifest publishing is mocked).
+
+## Container logs
+
+The image emits newline-delimited JSON to Docker stdout. Each record has
+`log_schema: "uos.v1"`, `timestamp`, `service`, `source`, `level`, and `message`.
+This replaces the old `[uos-entrypoint]` and abbreviated journal text formats.
+Log collectors must decode the JSON to use these fields.
+
+```json
+{"log_schema":"uos.v1","source":"file","service":"postgresql","unit":"postgresql@14-main.service","file":"/var/log/postgresql/postgresql-14-main.log","timestamp":"2026-11-03T06:22:11.205Z","level":"error","message":"2026-11-03 06:22:11.205 UTC [456] app@db ERROR:  division by zero","original_timestamp":"2026-11-03 06:22:11.205 UTC","pid":456,"postgres_context":"app@db","postgres_severity":"ERROR"}
+```
+
+- **Journal:** forwards UniFi service records since container startup, then follows
+  new entries. Service names come from systemd units, so `node24` from
+  `unifi-core.service` is labeled `unifi-core`, and `unifi.service` is
+  `unifi-network`. PostgreSQL and MongoDB use `postgresql` and `mongodb`.
+  Other service units retain their names without `.service`. Systemd messages about these services use the target service name and expose
+  `related_unit`; the original systemd emitter remains in `journal`.
+- **Context:** journal timestamps retain microseconds and UTC timezone. `unit`,
+  `identifier`, `process`, and `pid` are exposed when available. The complete
+  original record stays under `journal`, including priority, cursor, boot and
+  invocation IDs, transport, and application fields. Long fields are requested
+  with `journalctl --all`; multiline journal messages stay in one JSON record
+  with escaped newlines. Binary/repeated fields retain their original arrays in
+  `journal`. Kernel, host networking, and unrelated system services are excluded.
+- **Parsing:** journal priority supplies the default level. Recognized Network,
+  Logback, Node error, and MongoDB messages add application severity and available
+  logger/thread/component fields. MongoDB exposes its message text, with the
+  original JSON retained in `journal.MESSAGE`. Unknown
+  formats remain visible. PostgreSQL records expose PID, connection context,
+  severity, and the original timestamp. UTC/numeric offsets are normalized;
+  ambiguous timezone abbreviations use collection time while retaining the
+  original timestamp. `DETAIL`, `HINT`, `CONTEXT`, and `STATEMENT` are retained as
+  `postgres_severity`, with `level: "unknown"` rather than guessing a severity.
+- **Service scope:** includes UniFi/UOS/ULP/UCS services and their PostgreSQL,
+  MongoDB, RabbitMQ, and nginx dependencies. Routine MongoDB connection, client
+  metadata, and successful-authentication messages at info/debug/notice levels
+  are suppressed; warnings, errors, and other diagnostics remain.
+- **PostgreSQL file:** also follows the bundled cluster's
+  `/var/log/postgresql/postgresql-14-main.log`, including delayed creation,
+  rename-and-create rotation, and detected truncation. The current file is read
+  from the beginning on startup, so a container restart can replay retained
+  PostgreSQL logs. Each physical file line is a record, including SQL continuation
+  lines. Custom PostgreSQL log paths and other application log files are not
+  collected by this forwarder; they need a separate file source.
+- **Recovery:** failed journal readers restart after the last emitted cursor,
+  falling back to startup history if that reader exits without making progress;
+  failed file readers replay the current file. If the forwarder itself crashes,
+  the entrypoint restarts it and replays available records since container start.
+  Replays can produce duplicates. Backpressure pauses readers instead of dropping
+  output. There is no durable delivery queue: journal/file retention and Docker's
+  logging driver still determine how much history survives outages.
+
+These behaviors use systemd's [JSON output options](https://www.freedesktop.org/software/systemd/man/latest/journalctl.html)
+and [journal fields](https://www.freedesktop.org/software/systemd/man/latest/systemd.journal-fields.html).
+
+For a readable local view:
+
+```sh
+docker logs -f unifi-os-server | jq -r '[.timestamp, .service, .level, .message] | @tsv'
+```
+
+For Vector's `docker_logs` source, decode recognized image records **before** any
+legacy text parsing. For example, use this in a remap transform and put existing
+legacy parsing in the `else` branch. This preserves Docker container metadata and
+leaves sidecar formats to their existing parsers:
+
+```text
+parsed, err = parse_json(.message)
+if err == null && is_object(parsed) && parsed.log_schema == "uos.v1" {
+  . = merge(., object!(parsed))
+  .timestamp = parse_timestamp!(string!(parsed.timestamp), "%+")
+  .parse_status = "parsed"
+} else {
+  # Existing legacy / sidecar parsing goes here.
+}
+```
+
+Run `node --test tests/*.test.cjs` for parser tests. Linux also runs the reader
+lifecycle test using GNU tail; Docker builds run both with the extracted image's
+Node runtime on each target architecture. `bash -n uos-entrypoint.sh` checks shell
+syntax.
+
+For a smoke test with real journald and PostgreSQL, use a disposable local image
+container (no host data volumes or published ports):
+
+```sh
+docker run --rm --entrypoint /bin/bash -v "$PWD:/work:ro" \
+  ghcr.io/unihosted/unifi-os-server-docker:latest /work/tests/image-smoke.sh
+```
+
 ## Node.js security patch
 
 The image replaces Ubiquiti's `/usr/bin/node24` with the official Node.js **24.22.1** binary on amd64 and arm64 to address [Node2Shell (CVE-2026-111497)](https://nodejs.org/en/blog/release/v24.22.1/). This is the executable used by UniFi Core's systemd service. Downloads are checked against pinned SHA-256 hashes, and the build verifies the version, native addon ABI, and Brotli compression/decompression inside the extracted rootfs.
