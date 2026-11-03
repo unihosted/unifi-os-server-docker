@@ -49,6 +49,7 @@ services:
     environment:
       TZ: Europe/Amsterdam
       UOS_SYSTEM_IP: "127.0.0.1"
+      UOS_LOG_FORMAT: "json" # Set to "text" for human-readable Docker logs.
       MONGO_INTERNAL: "false" # Defaults to false → uses the external MongoDB service below.
       # Set to "true" and remove the unifi-network-mongodb service + depends_on
       # to let the UniFi Network App run its own mongod (port 27117).
@@ -93,7 +94,28 @@ custom installer URLs require a single explicit version.
 
 ## Container logs
 
-The image emits newline-delimited JSON to Docker stdout. Each record has
+Set `UOS_LOG_FORMAT` to `json` (the default) or `text` in the container environment.
+For human-readable output without a JSON parser, use:
+
+```yaml
+environment:
+  UOS_LOG_FORMAT: "text"
+```
+
+Recreate the container after changing the setting (`docker compose up -d`), then
+view the output with `docker logs -f unifi-os-server`. Text output looks like:
+
+```text
+2026-11-03T07:24:15.277999Z [postgresql] INFO: Started PostgreSQL Cluster 14-main.
+2026-11-03T07:24:15.308Z [uos-entrypoint] INFO: PostgreSQL: exposed on port 5432
+```
+
+Both formats use the same service filtering, severity parsing, and recovery.
+Text mode prints the timestamp, service, level, and message, with the same prefix
+on every line of a multiline message. JSON mode also includes the structured
+metadata described below. Invalid format values stop startup with an error.
+
+In JSON mode, the image emits newline-delimited JSON to Docker stdout. Each record has
 `log_schema: "uos.v1"`, `timestamp`, `service`, `source`, `level`, and `message`.
 This replaces the old `[uos-entrypoint]` and abbreviated journal text formats.
 Log collectors must decode the JSON to use these fields.
@@ -146,7 +168,7 @@ Log collectors must decode the JSON to use these fields.
 These behaviors use systemd's [JSON output options](https://www.freedesktop.org/software/systemd/man/latest/journalctl.html)
 and [journal fields](https://www.freedesktop.org/software/systemd/man/latest/systemd.journal-fields.html).
 
-For a readable local view:
+For a readable local view while keeping the container in JSON mode:
 
 ```sh
 docker logs -f unifi-os-server | jq -r '[.timestamp, .service, .level, .message] | @tsv'

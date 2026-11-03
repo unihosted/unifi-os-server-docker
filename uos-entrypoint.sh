@@ -4,6 +4,15 @@
 # shared by containers, so journalctl --boot alone would replay previous starts.
 UOS_LOG_SINCE="@$(date +%s)"
 
+export UOS_LOG_FORMAT="${UOS_LOG_FORMAT:-json}"
+case "$UOS_LOG_FORMAT" in
+    json|text) ;;
+    *)
+        printf 'UOS_LOG_FORMAT must be json or text (got: %s)\n' "$UOS_LOG_FORMAT" >&2
+        exit 1
+        ;;
+esac
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

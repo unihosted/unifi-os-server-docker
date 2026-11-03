@@ -181,8 +181,12 @@ async function* lines(stream) {
 }
 
 function emit(event) {
+    const prefix = `${event.timestamp} [${event.service}] ${event.level.toUpperCase()}: `;
+    const output = process.env.UOS_LOG_FORMAT === 'text'
+        ? event.message.split(/\r?\n/).map(line => prefix + line).join('\n')
+        : JSON.stringify(event);
     return new Promise((resolve, reject) => {
-        process.stdout.write(`${JSON.stringify(event)}\n`, error => error ? reject(error) : resolve());
+        process.stdout.write(`${output}\n`, error => error ? reject(error) : resolve());
     });
 }
 
