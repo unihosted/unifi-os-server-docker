@@ -49,7 +49,7 @@ services:
     environment:
       TZ: Europe/Amsterdam
       UOS_SYSTEM_IP: "127.0.0.1"
-      UOS_LOG_FORMAT: "json" # Set to "text" for human-readable Docker logs.
+      UOS_LOG_FORMAT: "text" # Default; set to "json" for structured log collectors.
       MONGO_INTERNAL: "false" # Defaults to false → uses the external MongoDB service below.
       # Set to "true" and remove the unifi-network-mongodb service + depends_on
       # to let the UniFi Network App run its own mongod (port 27117).
@@ -94,21 +94,28 @@ custom installer URLs require a single explicit version.
 
 ## Container logs
 
-Set `UOS_LOG_FORMAT` to `json` (the default) or `text` in the container environment.
-For human-readable output without a JSON parser, use:
+This image runs many services, including UniFi Core, UniFi Network, PostgreSQL,
+nginx, and RabbitMQ. Each produces its own log format, so the forwarder identifies
+the service and parses timestamps and severity into a consistent output. This
+makes it easier to see which service a message belongs to and spot errors in
+`docker logs`.
 
-```yaml
-environment:
-  UOS_LOG_FORMAT: "text"
-```
-
-Recreate the container after changing the setting (`docker compose up -d`), then
-view the output with `docker logs -f unifi-os-server`. Text output looks like:
+Human-readable text is the default (`UOS_LOG_FORMAT=text`). View it with
+`docker logs -f unifi-os-server`:
 
 ```text
 2026-11-03T07:24:15.277999Z [postgresql] INFO: Started PostgreSQL Cluster 14-main.
 2026-11-03T07:24:15.308Z [uos-entrypoint] INFO: PostgreSQL: exposed on port 5432
 ```
+
+For structured log collectors, opt into JSON in your Compose environment:
+
+```yaml
+environment:
+  UOS_LOG_FORMAT: "json"
+```
+
+Recreate the container after changing the setting (`docker compose up -d`).
 
 Both formats use the same service filtering, severity parsing, and recovery.
 Text mode prints the timestamp, service, level, and message, with the same prefix

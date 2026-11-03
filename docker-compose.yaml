@@ -40,7 +40,7 @@ services:
     environment:
       TZ: Europe/Amsterdam
       UOS_SYSTEM_IP: "127.0.0.1"
-      UOS_LOG_FORMAT: "json" # Set to "text" for human-readable Docker logs.
+      UOS_LOG_FORMAT: "text" # Default; set to "json" for structured log collectors.
       MONGO_INTERNAL: "false" # Defaults to false → uses the external MongoDB service below.
 
   unifi-os-server-mongodb:
