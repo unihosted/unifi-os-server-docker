@@ -1,10 +1,15 @@
 # UniFi OS Server in Docker
 
-> Ubiquiti only ships the UniFi OS Server (UOS) as an OCI image embedded inside a proprietary Rust installer — you can't just pull it from a registry. This repository extracts that OCI image, adjusts it to our liking, and ships it with a compose file and config that make it fit to run in Docker. No parallel Podman setup required.
+Run UniFi OS Server with Docker Compose using the published image from
+`ghcr.io/unihosted/unifi-os-server-docker`. This project packages the image from
+Ubiquiti's installer for Docker, with persistent storage and readable service logs.
 
 ## Quick Start
 
-Save the compose below as `docker-compose.yaml`, set `UOS_SYSTEM_IP` to your public IP, and run `docker compose up -d`. The Web UI will be at `https://localhost:11443` once the container is ready. Every port and environment variable is documented inline: the compose *is* the reference.
+Save the Compose configuration below as `docker-compose.yaml`. Set `UOS_SYSTEM_IP`
+to the host IP your UniFi devices can reach, then run `docker compose up -d`.
+Open `https://localhost:11443` on the Docker host once the container is ready.
+The example uses a separate MongoDB container; [bundled MongoDB is also available](#whats-inside).
 
 ```yaml
 services:
@@ -49,8 +54,9 @@ services:
     environment:
       TZ: Europe/Amsterdam
       UOS_SYSTEM_IP: "127.0.0.1"
+      UOS_LOG_FORMAT: "text" # Default; set to "json" for structured log collectors.
       MONGO_INTERNAL: "false" # Defaults to false → uses the external MongoDB service below.
-      # Set to "true" and remove the unifi-network-mongodb service + depends_on
+      # Set to "true" and remove the unifi-os-server-mongodb service + depends_on
       # to let the UniFi Network App run its own mongod (port 27117).
 
   unifi-os-server-mongodb:
@@ -65,23 +71,56 @@ networks:
   unifi-os-server-network:
 ```
 
+## What's inside
 
-## Why This Exists
+![UniFi OS Server services and log output](docs/images/services.png)
 
-Ubiquiti ships UOS as an OCI image, but bundles it inside a proprietary installer rather than publishing it to a registry. At UniHosted we were already running everything else in Docker, so rather than maintain a parallel Podman setup just for one application, we extract the OCI image from the installer and re-package it so it runs cleanly under Docker. Once the pipeline worked, it seemed silly not to share it. If you're in the same boat, here it is.
+The main container runs UniFi Core, UniFi Network, nginx, PostgreSQL, RabbitMQ,
+and supporting services under systemd. Arrows to the log forwarder show log
+collection; other service connections are omitted for clarity.
 
-By default the internal mongod is removed and the container expects a separate MongoDB 4.4 instance (see the included `docker-compose.yaml`). Set `MONGO_INTERNAL=true` to let the UniFi Network App manage its own bundled mongod (port 27117) instead.
+MongoDB can run inside the main container or in an optional separate container.
+The `MONGO_INTERNAL` environment variable selects the mode: `"false"` (default)
+uses external MongoDB, as in the Compose example; `"true"` uses UniFi Network's
+bundled MongoDB. For bundled MongoDB, remove the `unifi-os-server-mongodb` service
+and its `depends_on` entry.
 
-## How It Works
+## Container logs
 
-One of the nice things about this project is that the build is fully transparent: nothing happens behind a curtain. We download the official Ubiquiti UOS installer, extract the embedded OCI image from it, and flatten its layers into a rootfs that Docker can consume. In other words, we're not distributing or re-distributing any Ubiquiti code; we're taking an OCI image that Ubiquiti already built and making it runnable outside their installer. Our own entrypoint is layered on top, and at runtime it configures MongoDB, wires up networking (macvlan `eth0` alias), exposes PostgreSQL, and hands off to systemd. The entire pipeline runs through the [`build-image`](.github/workflows/build-image.yml) GitHub Action, so you can inspect exactly what happens at every step.
+Several services run inside this image, each with its own log format. The log
+forwarder brings their output together with consistent timestamps, service names,
+and severity so you can quickly see what is happening.
 
-## Node.js security patch
+Human-readable logs are the default. View them with:
 
-The image replaces Ubiquiti's `/usr/bin/node24` with the official Node.js **24.22.1** binary on amd64 and arm64 to address [Node2Shell (CVE-2026-111497)](https://nodejs.org/en/blog/release/v24.22.1/). This is the executable used by UniFi Core's systemd service. Downloads are checked against pinned SHA-256 hashes, and the build verifies the version, native addon ABI, and Brotli compression/decompression inside the extracted rootfs.
+```sh
+docker logs -f unifi-os-server
+```
 
-This is a temporary runtime override until Ubiquiti ships a fixed package. The Debian `node24` package metadata still reports Ubiquiti's original version; check the running binary with `docker exec unifi-os-server /usr/bin/node24 --version`. An in-container package update can overwrite the patched binary, so deploy rebuilt images to retain the fix. When updating the patch, change the version and both architecture hashes together in `Dockerfile`.
+```text
+2026-11-03T07:24:15.277999Z [postgresql] INFO: Started PostgreSQL Cluster 14-main.
+2026-11-03T07:24:15.308Z [uos-entrypoint] INFO: PostgreSQL: exposed on port 5432
+```
+
+For a log collector, set `UOS_LOG_FORMAT: "json"` in the service's environment
+and apply the change with `docker compose up -d`. Each output line is a JSON
+record with `timestamp`, `service`, `level`, `message`, and additional context.
+Set it back to `"text"` for readable output.
+
+See the [logging reference](docs/logging.md) for JSON fields, collector examples,
+filtering, and log-size limits.
+
+## About this project
+
+At UniHosted, we wanted to run UniFi OS Server alongside our other Docker
+services. We package the OCI image from Ubiquiti's installer so it can run with
+Docker Compose, and share the build process in this repository.
+
+For contributors, the [build and maintenance notes](docs/building.md) cover
+supported versions, publishing, and the included Node.js security patch. The
+[editable service diagram](docs/images/services.excalidraw) can be opened in Excalidraw.
 
 ---
 
-This project is not affiliated with, endorsed by, or supported by Ubiquiti Inc. All trademarks and copyrights belong to their respective owners.
+This project is not affiliated with, endorsed by, or supported by Ubiquiti Inc.
+All trademarks and copyrights belong to their respective owners.

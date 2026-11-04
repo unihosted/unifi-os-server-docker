@@ -12,9 +12,9 @@ on:
         required: false
         default: ""
       uos_server_version:
-        description: "UniFi OS Server version (for tagging)"
+        description: "UniFi OS Server version, or all to rebuild every supported version"
         required: true
-        default: "5.1.42"
+        default: "all"
       image_name:
         description: "Final image name (without registry). Example: unifi-os-server-docker"
         required: true
@@ -41,17 +41,22 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       include: ${{ steps.set-matrix.outputs.include }}
+      latest_version: ${{ steps.set-matrix.outputs.latest_version }}
     steps:
       - name: Build platform matrix
         id: set-matrix
         shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.uos_server_version || 'all' }}
+          CUSTOM_URL_AMD64: ${{ inputs.installer_url_amd64 || '' }}
+          CUSTOM_URL_ARM64: ${{ inputs.installer_url_arm64 || '' }}
         run: |
           set -euo pipefail
 
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF#refs/tags/v}"
           else
-            VERSION="${{ inputs.uos_server_version || '5.1.42' }}"
+            VERSION="$REQUESTED_VERSION"
           fi
 
           declare -A VERSION_URLS_AMD64=(
@@ -74,23 +79,39 @@ jobs:
             ["5.1.42"]="https://fw-download.ubnt.com/data/unifi-os-server/f730-linux-arm64-5.1.42-d2bca8bd-d6fc-4d20-99e5-b78235843c2f.42-arm64"
           )
 
-          URL_AMD64="${{ inputs.installer_url_amd64 || '' }}"
-          URL_ARM64="${{ inputs.installer_url_arm64 || '' }}"
-          [[ -n "$URL_AMD64" ]] || URL_AMD64="${VERSION_URLS_AMD64[$VERSION]:-}"
-          [[ -n "$URL_ARM64" ]] || URL_ARM64="${VERSION_URLS_ARM64[$VERSION]:-}"
+          if [[ "$VERSION" == all ]]; then
+            if [[ -n "$CUSTOM_URL_AMD64" || -n "$CUSTOM_URL_ARM64" ]]; then
+              echo "Custom installer URLs require a single explicit version" >&2
+              exit 1
+            fi
+            mapfile -t VERSIONS < <(printf '%s\n' "${!VERSION_URLS_AMD64[@]}" "${!VERSION_URLS_ARM64[@]}" | sort -Vu)
+          else
+            VERSIONS=("$VERSION")
+          fi
 
           INCLUDES="[]"
-          if [[ -n "$URL_AMD64" ]]; then
-            INCLUDES=$(echo "$INCLUDES" | jq -c --arg v "$VERSION" --arg u "$URL_AMD64" \
-              '. + [{"version": $v, "platform": "linux/amd64", "arch_suffix": "amd64", "installer_url": $u}]')
-          fi
-          if [[ -n "$URL_ARM64" ]]; then
-            INCLUDES=$(echo "$INCLUDES" | jq -c --arg v "$VERSION" --arg u "$URL_ARM64" \
-              '. + [{"version": $v, "platform": "linux/arm64", "arch_suffix": "arm64", "installer_url": $u}]')
-          fi
+          for VERSION in "${VERSIONS[@]}"; do
+            URL_AMD64="${CUSTOM_URL_AMD64:-${VERSION_URLS_AMD64[$VERSION]:-}}"
+            URL_ARM64="${CUSTOM_URL_ARM64:-${VERSION_URLS_ARM64[$VERSION]:-}}"
+            if [[ -z "$URL_AMD64" && -z "$URL_ARM64" ]]; then
+              echo "No installer URLs configured for $VERSION" >&2
+              exit 1
+            fi
+            if [[ -n "$URL_AMD64" ]]; then
+              INCLUDES=$(echo "$INCLUDES" | jq -c --arg v "$VERSION" --arg u "$URL_AMD64" \
+                '. + [{"version": $v, "platform": "linux/amd64", "arch_suffix": "amd64", "installer_url": $u}]')
+            fi
+            if [[ -n "$URL_ARM64" ]]; then
+              INCLUDES=$(echo "$INCLUDES" | jq -c --arg v "$VERSION" --arg u "$URL_ARM64" \
+                '. + [{"version": $v, "platform": "linux/arm64", "arch_suffix": "arm64", "installer_url": $u}]')
+            fi
+          done
 
-          echo "include=$INCLUDES" >> "$GITHUB_OUTPUT"
-          echo "Building $VERSION for: $(echo "$INCLUDES" | jq -r '.[].platform' | tr '\n' ' ')"
+          {
+            echo "include=$INCLUDES"
+            echo "latest_version=${VERSIONS[-1]}"
+          } >> "$GITHUB_OUTPUT"
+          echo "$INCLUDES" | jq -r '.[] | "Building \(.version) for \(.platform)"'
 
   build:
     needs: matrix
@@ -169,6 +190,8 @@ jobs:
 
       - name: Create multi-arch manifest
         shell: bash
+        env:
+          LATEST_VERSION: ${{ needs.matrix.outputs.latest_version }}
         run: |
           set -euo pipefail
           IMAGE="${{ steps.vars.outputs.ghcr_image }}"
@@ -176,17 +199,18 @@ jobs:
 
           VERSIONS=$(echo "$INCLUDE" | jq -r '.[].version' | sort -u)
           for VERSION in $VERSIONS; do
-            SOURCES=$(echo "$INCLUDE" | jq -r --arg v "$VERSION" \
-              '.[] | select(.version == $v) | .arch_suffix' | \
-              xargs -I{} echo "${IMAGE}:${VERSION}-{}")
+            mapfile -t SOURCES < <(echo "$INCLUDE" | jq -r --arg v "$VERSION" --arg image "$IMAGE" \
+              '.[] | select(.version == $v) | "\($image):\($v)-\(.arch_suffix)"')
+            TAGS=(-t "${IMAGE}:${VERSION}")
+            if [[ "$VERSION" == "$LATEST_VERSION" ]]; then
+              TAGS+=(-t "${IMAGE}:latest")
+            fi
 
             echo "Creating manifest ${IMAGE}:${VERSION} from:"
-            echo "$SOURCES"
+            printf '%s\n' "${SOURCES[@]}"
 
             docker buildx imagetools create \
-              -t "${IMAGE}:${VERSION}" \
-              -t "${IMAGE}:latest" \
-              $SOURCES
+              "${TAGS[@]}" "${SOURCES[@]}"
           done
 
       - name: Summary
@@ -194,8 +218,9 @@ jobs:
         run: |
           IMAGE="${{ steps.vars.outputs.ghcr_image }}"
           INCLUDE='${{ needs.matrix.outputs.include }}'
-          VERSION=$(echo "$INCLUDE" | jq -r '.[0].version')
-          echo "### Published" >> "$GITHUB_STEP_SUMMARY"
-          echo "- \`${IMAGE}:${VERSION}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- \`${IMAGE}:latest\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Platforms: $(echo "$INCLUDE" | jq -r '.[].platform' | tr '\n' ', ')" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### Published"
+            echo "$INCLUDE" | jq -r --arg image "$IMAGE" \
+              'group_by(.version)[] | "- `\($image):\(.[0].version)` (\(map(.platform) | join(", ")))"'
+            echo "- \`${IMAGE}:latest\` → ${{ needs.matrix.outputs.latest_version }}"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,12 +1,24 @@
 #!/bin/bash
 
+# Capture the container start boundary before initialization. A host boot ID is
+# shared by containers, so journalctl --boot alone would replay previous starts.
+UOS_LOG_SINCE="@$(date +%s)"
+
+export UOS_LOG_FORMAT="${UOS_LOG_FORMAT:-text}"
+case "$UOS_LOG_FORMAT" in
+    json|text) ;;
+    *)
+        printf 'UOS_LOG_FORMAT must be json or text (got: %s)\n' "$UOS_LOG_FORMAT" >&2
+        exit 1
+        ;;
+esac
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 log() {
-    echo "[uos-entrypoint][$(date -Iseconds)] $*"
+    /usr/bin/node24 /root/uos-logs.cjs --entrypoint "$*"
 }
 
 # Set or update a key in UniFi's system.properties (creates the file if absent).
@@ -216,16 +228,17 @@ fi
 # 7. Journal forwarding & systemd
 # ---------------------------------------------------------------------------
 
-# Forward journalctl to Docker log stream.
+# Forward structured journal records and PostgreSQL's file to Docker logs.
 # Save Docker's stdout before systemd replaces it with /dev/null.
 exec 3>&1
 (
-    # Wait until systemd-journald has created its journal files.
-    # journalctl exits 0 even without files, so check its output instead.
-    while journalctl -n 0 2>&1 | grep -q "No journal files were found"; do
+    # The forwarder retries missing journals/files and failed child readers.
+    # Restart the forwarder itself if it fails; replay from this start boundary.
+    while true; do
+        /usr/bin/node24 /root/uos-logs.cjs "$UOS_LOG_SINCE" >&3 2>&3
+        log "WARNING: log forwarder exited; restarting in 1s" >&3
         sleep 1
     done
-    exec journalctl -f --no-hostname -o short >&3 2>&3
 ) &
 
 log "Starting systemd init"
