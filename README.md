@@ -110,6 +110,18 @@ Set it back to `"text"` for readable output.
 See the [logging reference](docs/logging.md) for JSON fields, collector examples,
 filtering, and log-size limits.
 
+## Patched CVEs
+
+For releases that bundle Node 24, the image includes the following runtime patch
+on amd64 and arm64. Older releases retain their Node 22 application runtime.
+
+| CVE | Node.js upgrade | Fix | Status |
+| --- | --- | --- | --- |
+| [CVE-2026-111497 (Node2Shell)](https://nodejs.org/en/blog/release/v24.22.1/) | 24.8.0 → 24.22.1 | [PR #17](https://github.com/unihosted/unifi-os-server-docker/pull/17) | [Issue #19 — completed](https://github.com/unihosted/unifi-os-server-docker/issues/19) |
+
+See the [Node.js security patch notes](docs/building.md#nodejs-security-patch)
+for verification and package update caveats.
+
 ## About this project
 
 At UniHosted, we wanted to run UniFi OS Server alongside our other Docker
