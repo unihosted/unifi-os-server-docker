@@ -80,9 +80,10 @@ and supporting services under systemd. Arrows to the log forwarder show log
 collection; other service connections are omitted for clarity.
 
 MongoDB can run inside the main container or in an optional separate container.
-Choose one mode. The Compose example uses the separate container. To use UniFi
-Network's bundled MongoDB instead, set `MONGO_INTERNAL: "true"` and remove the
-`unifi-os-server-mongodb` service and its `depends_on` entry.
+The `MONGO_INTERNAL` environment variable selects the mode: `"false"` (default)
+uses external MongoDB, as in the Compose example; `"true"` uses UniFi Network's
+bundled MongoDB. For bundled MongoDB, remove the `unifi-os-server-mongodb` service
+and its `depends_on` entry.
 
 ## Container logs
 
