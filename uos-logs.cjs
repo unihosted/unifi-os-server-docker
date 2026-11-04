@@ -7,27 +7,37 @@ const { setTimeout: sleep } = require('node:timers/promises');
 const SCHEMA = 'uos.v1';
 const LEVELS = ['emergency', 'alert', 'critical', 'error', 'warning', 'notice', 'info', 'debug'];
 const PG_LOG = '/var/log/postgresql/postgresql-14-main.log';
+const MAX_RECORD_BYTES = 1024 * 1024;
+const MONGO_EVENT = Symbol('mongoEvent');
+const MONGO_LEVELS = new Map([['I', 'info'], ['W', 'warning'], ['E', 'error'], ['F', 'fatal']]);
+const JOURNAL_FIELDS = ['MESSAGE', 'PRIORITY', 'SYSLOG_IDENTIFIER', '__CURSOR',
+    '__REALTIME_TIMESTAMP', '__MONOTONIC_TIMESTAMP', '_SOURCE_REALTIME_TIMESTAMP',
+    '_BOOT_ID', '_SYSTEMD_INVOCATION_ID', '_TRANSPORT', '_SYSTEMD_UNIT',
+    '_SYSTEMD_USER_UNIT', '_PID', '_UID', '_GID', '_COMM', '_EXE'];
 const UNIFI_UNIT = /^(?:(?:unifi|uos|ulp|ucs)(?:-[\w.@-]+)?|uid-agent|postgresql(?:-cluster)?(?:@[\w.-]+)?|mongod(?:b)?|rabbitmq-server|nginx)\.service$/;
 
 function relatedUnit(record) {
-    if (field(record.SYSLOG_IDENTIFIER) !== 'systemd' && field(record._COMM) !== 'systemd') return undefined;
-    const unit = field(record.UNIT) || field(record.OBJECT_SYSTEMD_UNIT) || field(record.USER_UNIT);
+    // Only the system manager may attribute its lifecycle messages to a unit.
+    // SYSLOG_IDENTIFIER and process names are not proof of emitter identity.
+    if (field(record._PID) !== '1' || field(record._UID) !== '0'
+        || field(record._SYSTEMD_UNIT) !== 'init.scope') return undefined;
+    const unit = field(record.UNIT) || field(record.OBJECT_SYSTEMD_UNIT);
     return unit && UNIFI_UNIT.test(unit) ? unit : undefined;
 }
 
 function shouldForwardJournal(record) {
     if (field(record._TRANSPORT) === 'kernel') return false;
-    const unit = field(record._SYSTEMD_USER_UNIT) || field(record._SYSTEMD_UNIT);
+    const unit = field(record._SYSTEMD_UNIT);
     if (unit && UNIFI_UNIT.test(unit)) return true;
     if (relatedUnit(record)) return true;
-    // Some syslog emitters have no cgroup attribution. Only accept known daemons.
-    return !unit && /^(?:postgres(?:ql)?(?:@[\w.-]+)?|mongod(?:b)?|nginx|rabbitmq-server|unifi(?:-[\w.-]+)?)$/.test(field(record.SYSLOG_IDENTIFIER) || '');
+    // An application-supplied identifier cannot establish service membership.
+    return false;
 }
 
 function shouldForwardEvent(event) {
     // Keep warnings/errors about connections and authentication. Only routine
     // MongoDB lifecycle messages are suppressed, not arbitrary connection text.
-    return !(event.service === 'mongodb' && ['info', 'debug', 'trace', 'notice'].includes(event.level)
+    return !(event[MONGO_EVENT] && ['info', 'debug', 'trace', 'notice'].includes(event.level)
         && /^(?:Connection accepted|Connection ended|Authentication succeeded|client metadata|Successfully authenticated)(?::| |$)/.test(event.message));
 }
 
@@ -42,7 +52,7 @@ function field(value) {
 }
 
 function timestamp(microseconds) {
-    if (!/^\d+$/.test(microseconds || '')) return undefined;
+    if (!/^\d{1,20}$/.test(microseconds || '')) return undefined;
     const value = BigInt(microseconds);
     const date = new Date(Number(value / 1000n));
     if (!Number.isFinite(date.getTime())) return undefined;
@@ -67,6 +77,7 @@ function levelName(level) {
 function parseMessage(event) {
     // Keep .message intact: prefixes and whitespace can be useful diagnostics.
     const message = event.message;
+    const originalLevel = event.level;
     const network = message.match(/^\[([^\]]+)\]\s+<([^>]+)>\s+(TRACE|DEBUG|INFO|WARN|ERROR)\s+(\S+)\s+-\s/s);
     const logback = message.match(/^\d{2}:\d{2}:\d{2},\d+\s+\|-(TRACE|DEBUG|INFO|WARN|ERROR)\s+in\s+(\S+)\s+-/);
     const severityPrefix = message.match(/^(TRACE|DEBUG|INFO|NOTICE|WARN|WARNING|ERROR|FATAL|CRITICAL|ALERT|EMERGENCY):/);
@@ -84,32 +95,48 @@ function parseMessage(event) {
         event.level = /^\s*FATAL:/.test(message) ? 'fatal' : 'error';
     }
     try {
-        const mongo = JSON.parse(message);
+        const mongo = event[MONGO_EVENT] && message.trimStart().startsWith('{') ? JSON.parse(message) : null;
         if (mongo && typeof mongo.msg === 'string' && typeof mongo.t?.$date === 'string' && typeof mongo.s === 'string') {
-            event.service = 'mongodb';
             event.message = mongo.msg;
-            event.level = ({ I: 'info', W: 'warning', E: 'error', F: 'fatal' })[mongo.s]
+            event.level = MONGO_LEVELS.get(mongo.s)
                 || (/^D/.test(mongo.s) ? 'debug' : event.level);
-            event.component = mongo.c;
-            event.thread = mongo.ctx;
-            event.event_id = mongo.id;
-            event.attributes = mongo.attr;
+            event.component = typeof mongo.c === 'string' ? mongo.c : undefined;
+            event.thread = typeof mongo.ctx === 'string' ? mongo.ctx : undefined;
+            event.event_id = Number.isSafeInteger(mongo.id) ? mongo.id : undefined;
+            event.attributes = boundedAttributes(mongo.attr);
             event.application_timestamp = mongo.t.$date;
         }
     } catch {
         // Plain-text messages are expected; retain them unchanged.
     }
+    // Application text may raise severity, but must not hide journal warnings/errors.
+    const originalRank = LEVELS.indexOf(originalLevel);
+    const parsedRank = event.level === 'fatal' ? 2 : LEVELS.indexOf(event.level);
+    if (originalRank >= 0 && originalRank <= 4 && (parsedRank < 0 || parsedRank > originalRank)) {
+        event.level = originalLevel;
+    }
     return event;
 }
 
+function boundedAttributes(value, depth = 0) {
+    if (!value || typeof value !== 'object') return value;
+    // Keep adversarial nested JSON from overflowing the output serializer stack.
+    if (depth === 16) return '[maximum nesting depth reached]';
+    if (Array.isArray(value)) return value.map(item => boundedAttributes(item, depth + 1));
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, boundedAttributes(item, depth + 1)]));
+}
+
 function journalEvent(record) {
-    const unit = field(record._SYSTEMD_USER_UNIT) || field(record._SYSTEMD_UNIT);
+    const unit = field(record._SYSTEMD_UNIT);
     const identifier = field(record.SYSLOG_IDENTIFIER);
     const processName = field(record._COMM);
     const priority = field(record.PRIORITY);
-    const pid = field(record._PID) || field(record.SYSLOG_PID);
+    const pid = field(record._PID);
     const target = relatedUnit(record);
     return parseMessage({
+        // Bundled MongoDB may share unifi.service; retain that service label.
+        [MONGO_EVENT]: /^(?:mongod|mongodb)\.service$/.test(unit || '')
+            || (unit === 'unifi.service' && /\/mongod$/.test(field(record._EXE) || '')),
         log_schema: SCHEMA,
         source: 'journal',
         timestamp: timestamp(field(record.__REALTIME_TIMESTAMP)) || new Date().toISOString(),
@@ -119,11 +146,11 @@ function journalEvent(record) {
         identifier,
         process: processName,
         pid: /^\d+$/.test(pid || '') ? Number(pid) : undefined,
-        level: LEVELS[priority] || 'unknown',
+        level: /^[0-7]$/.test(priority || '') ? LEVELS[Number(priority)] : 'unknown',
         message: field(record.MESSAGE) ?? '',
-        // Includes cursor, boot/invocation IDs, transport, original priority,
-        // timestamps and any application fields, without an allowlist.
-        journal: record,
+        // Keep diagnostic context, excluding command lines and arbitrary fields.
+        journal: Object.fromEntries(JOURNAL_FIELDS.filter(key => Object.hasOwn(record, key))
+            .map(key => [key, record[key]])),
     });
 }
 
@@ -163,31 +190,75 @@ function diagnostic(message, level = 'info', service = 'uos-log-forwarder') {
 }
 
 // Async iteration propagates Docker stdout backpressure to journalctl/tail.
-// No line-size limit or JSON truncation; newlines in MESSAGE remain escaped in
-// a single output record. Invalid input is emitted rather than discarded.
-async function* lines(stream) {
-    stream.setEncoding('utf8');
-    let pending = '';
+// Scan each input chunk once. Oversized records are dropped in full, with one
+// diagnostic, then resume at the next newline without parsing a partial record.
+async function* lines(stream, onOversize = async () => {}) {
+    let pending;
+    let size = 0;
+    let dropping = false;
     for await (const chunk of stream) {
-        pending += chunk;
-        let newline;
-        while ((newline = pending.indexOf('\n')) !== -1) {
-            const line = pending.slice(0, newline);
-            pending = pending.slice(newline + 1);
-            yield line;
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        let start = 0;
+        while (start < bytes.length) {
+            const newline = bytes.indexOf(10, start);
+            const end = newline === -1 ? bytes.length : newline;
+            const length = end - start;
+            if (!dropping && size + length > MAX_RECORD_BYTES) {
+                size = 0;
+                dropping = true;
+                await onOversize();
+            }
+            if (!dropping) {
+                if (size === 0 && newline !== -1) {
+                    yield bytes.toString('utf8', start, end);
+                } else {
+                    pending ||= Buffer.allocUnsafe(MAX_RECORD_BYTES);
+                    bytes.copy(pending, size, start, end);
+                    size += length;
+                    if (newline !== -1) yield pending.toString('utf8', 0, size);
+                }
+            }
+            if (newline !== -1) {
+                size = 0;
+                dropping = false;
+            }
+            start = end + 1;
         }
     }
-    if (pending) yield pending;
+    if (size && !dropping) yield pending.toString('utf8', 0, size);
 }
 
-function emit(event) {
-    const prefix = `${event.timestamp} [${event.service}] ${event.level.toUpperCase()}: `;
-    const output = (process.env.UOS_LOG_FORMAT || 'text') === 'text'
-        ? event.message.split(/\r?\n/).map(line => prefix + line).join('\n')
-        : JSON.stringify(event);
+function readable(value) {
+    // Escape terminal controls, Unicode line separators and bidi overrides.
+    return value.replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g,
+        char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+function write(output) {
     return new Promise((resolve, reject) => {
-        process.stdout.write(`${output}\n`, error => error ? reject(error) : resolve());
+        process.stdout.write(output, error => error ? reject(error) : resolve());
     });
+}
+
+async function emit(event) {
+    if ((process.env.UOS_LOG_FORMAT || 'text') !== 'text') return write(`${JSON.stringify(event)}\n`);
+    const prefix = readable(`${event.timestamp} [${event.service}] ${event.level.toUpperCase()}: `);
+    let output = '';
+    let start = 0;
+    // Flush multiline output in batches so a newline-heavy message does not
+    // allocate all of its repeated prefixes at once. Every write is awaited.
+    for (;;) {
+        const newline = event.message.indexOf('\n', start);
+        let end = newline === -1 ? event.message.length : newline;
+        if (newline !== -1 && end > start && event.message[end - 1] === '\r') end--;
+        output += `${prefix}${readable(event.message.slice(start, end))}\n`;
+        if (output.length >= 64 * 1024 || newline === -1) {
+            await write(output);
+            output = '';
+        }
+        if (newline === -1) break;
+        start = newline + 1;
+    }
 }
 
 async function journalFilesExist(roots = ['/run/log/journal', '/var/log/journal']) {
@@ -232,11 +303,12 @@ async function forward({ since = `@${Math.floor(Date.now() / 1000)}`, postgresLo
             child.once('error', error => resolve(error.message));
             child.once('exit', (code, signal) => resolve(signal || code));
         });
+        const oversized = () => emit({ ...diagnostic(`Dropped a log record exceeding ${MAX_RECORD_BYTES} bytes`, 'warning'), reader: command });
         try {
             await Promise.all([
-                (async () => { for await (const line of lines(child.stdout)) await handle(line); })(),
+                (async () => { for await (const line of lines(child.stdout, oversized)) await handle(line); })(),
                 (async () => {
-                    for await (const line of lines(child.stderr)) {
+                    for await (const line of lines(child.stderr, oversized)) {
                         await emit({ ...diagnostic(line, 'warning'), reader: command });
                     }
                 })(),
@@ -274,8 +346,10 @@ async function forward({ since = `@${Math.floor(Date.now() / 1000)}`, postgresLo
                             await emit(diagnostic(`Unparsed journal output: ${line}`, 'warning'));
                             return;
                         }
-                        const event = journalEvent(record);
-                        if (shouldForwardJournal(record) && shouldForwardEvent(event)) await emit(event);
+                        if (shouldForwardJournal(record)) {
+                            const event = journalEvent(record);
+                            if (shouldForwardEvent(event)) await emit(event);
+                        }
                         // Advance over excluded records too, so reconnecting does
                         // not repeatedly scan host/kernel traffic.
                         cursor = field(record.__CURSOR) || cursor;
