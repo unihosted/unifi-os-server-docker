@@ -1,10 +1,15 @@
 # UniFi OS Server in Docker
 
-> Ubiquiti only ships the UniFi OS Server (UOS) as an OCI image embedded inside a proprietary Rust installer — you can't just pull it from a registry. This repository extracts that OCI image, adjusts it to our liking, and ships it with a compose file and config that make it fit to run in Docker. No parallel Podman setup required.
+Run UniFi OS Server with Docker Compose using the published image from
+`ghcr.io/unihosted/unifi-os-server-docker`. This project packages the image from
+Ubiquiti's installer for Docker, with persistent storage and readable service logs.
 
 ## Quick Start
 
-Save the compose below as `docker-compose.yaml`, set `UOS_SYSTEM_IP` to your public IP, and run `docker compose up -d`. The Web UI will be at `https://localhost:11443` once the container is ready. Every port and environment variable is documented inline: the compose *is* the reference.
+Save the Compose configuration below as `docker-compose.yaml`. Set `UOS_SYSTEM_IP`
+to the host IP your UniFi devices can reach, then run `docker compose up -d`.
+Open `https://localhost:11443` on the Docker host once the container is ready.
+The example uses a separate MongoDB container; [bundled MongoDB is also available](#whats-inside).
 
 ```yaml
 services:
@@ -51,7 +56,7 @@ services:
       UOS_SYSTEM_IP: "127.0.0.1"
       UOS_LOG_FORMAT: "text" # Default; set to "json" for structured log collectors.
       MONGO_INTERNAL: "false" # Defaults to false → uses the external MongoDB service below.
-      # Set to "true" and remove the unifi-network-mongodb service + depends_on
+      # Set to "true" and remove the unifi-os-server-mongodb service + depends_on
       # to let the UniFi Network App run its own mongod (port 27117).
 
   unifi-os-server-mongodb:
@@ -66,159 +71,55 @@ networks:
   unifi-os-server-network:
 ```
 
+## What's inside
 
-## Why This Exists
+![UniFi OS Server services and log output](docs/images/services.png)
 
-Ubiquiti ships UOS as an OCI image, but bundles it inside a proprietary installer rather than publishing it to a registry. At UniHosted we were already running everything else in Docker, so rather than maintain a parallel Podman setup just for one application, we extract the OCI image from the installer and re-package it so it runs cleanly under Docker. Once the pipeline worked, it seemed silly not to share it. If you're in the same boat, here it is.
+The main container runs UniFi Core, UniFi Network, nginx, PostgreSQL, RabbitMQ,
+and supporting services under systemd. Arrows to the log forwarder show log
+collection; other service connections are omitted for clarity.
 
-By default the internal mongod is removed and the container expects a separate MongoDB 4.4 instance (see the included `docker-compose.yaml`). Set `MONGO_INTERNAL=true` to let the UniFi Network App manage its own bundled mongod (port 27117) instead.
-
-## How It Works
-
-One of the nice things about this project is that the build is fully transparent: nothing happens behind a curtain. We download the official Ubiquiti UOS installer, extract the embedded OCI image from it, and flatten its layers into a rootfs that Docker can consume. In other words, we're not distributing or re-distributing any Ubiquiti code; we're taking an OCI image that Ubiquiti already built and making it runnable outside their installer. Our own entrypoint is layered on top, and at runtime it configures MongoDB, wires up networking (macvlan `eth0` alias), exposes PostgreSQL, and hands off to systemd. The entire pipeline runs through the [`build-image`](.github/workflows/build-image.yml) GitHub Action, so you can inspect exactly what happens at every step.
-
-## Rebuilding all supported versions
-
-Every version uses the same Dockerfile, entrypoint, and log forwarder. The
-`build-image` workflow defaults to `uos_server_version: all`, rebuilding 4.3.6,
-5.0.6, 5.1.15, 5.1.19, 5.1.21, 5.1.37, 5.1.40, and 5.1.42 from the selected Git
-ref. All have amd64 and arm64 builds except 4.3.6, which has only amd64.
-Older releases that only bundle Node 22 receive Node 24 for the forwarder; their
-application runtime stays unchanged.
-
-Set `push` to `false` for a build without publishing. When publishing all versions,
-each version gets its own image tag and `latest` points to the newest selected
-version (currently 5.1.42). Existing registry images gain these changes only after
-a rebuild and publish. You can still select one version or build a release tag;
-custom installer URLs require a single explicit version.
+MongoDB can run inside the main container or in an optional separate container.
+Choose one mode. The Compose example uses the separate container. To use UniFi
+Network's bundled MongoDB instead, set `MONGO_INTERNAL: "true"` and remove the
+`unifi-os-server-mongodb` service and its `depends_on` entry.
 
 ## Container logs
 
-This image runs many services, including UniFi Core, UniFi Network, PostgreSQL,
-nginx, and RabbitMQ. Each produces its own log format, so the forwarder identifies
-the service and parses timestamps and severity into a consistent output. This
-makes it easier to see which service a message belongs to and spot errors in
-`docker logs`.
+Several services run inside this image, each with its own log format. The log
+forwarder brings their output together with consistent timestamps, service names,
+and severity so you can quickly see what is happening.
 
-Human-readable text is the default (`UOS_LOG_FORMAT=text`). View it with
-`docker logs -f unifi-os-server`:
+Human-readable logs are the default. View them with:
+
+```sh
+docker logs -f unifi-os-server
+```
 
 ```text
 2026-11-03T07:24:15.277999Z [postgresql] INFO: Started PostgreSQL Cluster 14-main.
 2026-11-03T07:24:15.308Z [uos-entrypoint] INFO: PostgreSQL: exposed on port 5432
 ```
 
-For structured log collectors, opt into JSON in your Compose environment:
+For a log collector, set `UOS_LOG_FORMAT: "json"` in the service's environment
+and apply the change with `docker compose up -d`. Each output line is a JSON
+record with `timestamp`, `service`, `level`, `message`, and additional context.
+Set it back to `"text"` for readable output.
 
-```yaml
-environment:
-  UOS_LOG_FORMAT: "json"
-```
+See the [logging reference](docs/logging.md) for JSON fields, collector examples,
+filtering, and log-size limits.
 
-Recreate the container after changing the setting (`docker compose up -d`).
+## About this project
 
-Both formats use the same service filtering, severity parsing, and recovery.
-Text mode prints the timestamp, service, level, and message, with the same prefix
-on every line of a multiline message. JSON mode also includes the structured
-metadata described below. Invalid format values stop startup with an error.
-Text output escapes terminal control characters (for example, ESC becomes
-`\u001b`) to prevent messages from changing the terminal display. Both formats
-limit each incoming journal/file/reader-error record to 1 MiB. Larger records are
-dropped in full with a warning, and collection resumes at the next newline.
-This bounds buffering even when a service writes a long unterminated line.
+At UniHosted, we wanted to run UniFi OS Server alongside our other Docker
+services. We package the OCI image from Ubiquiti's installer so it can run with
+Docker Compose, and share the build process in this repository.
 
-In JSON mode, the image emits newline-delimited JSON to Docker stdout. Each record has
-`log_schema: "uos.v1"`, `timestamp`, `service`, `source`, `level`, and `message`.
-This replaces the old `[uos-entrypoint]` and abbreviated journal text formats.
-Log collectors must decode the JSON to use these fields.
-
-```json
-{"log_schema":"uos.v1","source":"file","service":"postgresql","unit":"postgresql@14-main.service","file":"/var/log/postgresql/postgresql-14-main.log","timestamp":"2026-11-03T06:22:11.205Z","level":"error","message":"2026-11-03 06:22:11.205 UTC [456] app@db ERROR:  division by zero","original_timestamp":"2026-11-03 06:22:11.205 UTC","pid":456,"postgres_context":"app@db","postgres_severity":"ERROR"}
-```
-
-- **Journal:** forwards UniFi service records since container startup, then follows
-  new entries. Service names come from systemd units, so `node24` from
-  `unifi-core.service` is labeled `unifi-core`, and `unifi.service` is
-  `unifi-network`. PostgreSQL and MongoDB use `postgresql` and `mongodb`.
-  Other service units retain their names without `.service`. Messages from the
-  root system manager (PID 1 in `init.scope`) about these services use the target
-  service name and expose `related_unit`; the original systemd emitter remains
-  in `journal`.
-- **Context:** journal timestamps retain microseconds and UTC timezone. `unit`,
-  `identifier`, `process`, and `pid` are exposed when available. An allowlist under
-  `journal` retains the original message and priority, identifier, cursor,
-  timestamps, boot and invocation IDs, transport, system/user units, PID/UID/GID,
-  process name and executable path. Command lines and arbitrary additional
-  journal fields are excluded. Message content and application attributes are
-  not secret-redacted; applications should avoid logging credentials.
-  Long fields are requested with `journalctl --all`; multiline journal messages stay in one JSON record
-  with escaped newlines. Binary/repeated fields retain their original arrays in
-  `journal`. Kernel, host networking, and unrelated system services are excluded.
-- **Parsing:** journal priority supplies the default level. Recognized Network,
-  Logback, Node error, and MongoDB messages add application severity and available
-  logger/thread/component fields. Parsing never lowers a journal warning/error
-  severity. MongoDB JSON is parsed only for MongoDB service units or a journal
-  executable path ending in `/mongod` within `unifi.service`; the systemd service
-  label is preserved, including `unifi-network` for bundled MongoDB. Its original
-  JSON stays in `journal.MESSAGE`; structured attributes deeper than 16 levels
-  are replaced with a depth-limit marker. Unknown
-  formats remain visible. PostgreSQL records expose PID, connection context,
-  severity, and the original timestamp. UTC/numeric offsets are normalized;
-  ambiguous timezone abbreviations use collection time while retaining the
-  original timestamp. `DETAIL`, `HINT`, `CONTEXT`, and `STATEMENT` are retained as
-  `postgres_severity`, with `level: "unknown"` rather than guessing a severity.
-- **Service scope:** includes UniFi/UOS/ULP/UCS services and their PostgreSQL,
-  MongoDB, RabbitMQ, and nginx dependencies. Routine MongoDB connection, client
-  metadata, and successful-authentication messages at info/debug/notice levels
-  are suppressed only for those identified MongoDB emitters; warnings, errors,
-  and other diagnostics remain. Records without recognized system service
-  attribution are excluded; application-supplied identifiers cannot opt in.
-- **PostgreSQL file:** also follows the bundled cluster's
-  `/var/log/postgresql/postgresql-14-main.log`, including delayed creation,
-  rename-and-create rotation, and detected truncation. The current file is read
-  from the beginning on startup, so a container restart can replay retained
-  PostgreSQL logs. Each physical file line is a record, including SQL continuation
-  lines. Custom PostgreSQL log paths and other application log files are not
-  collected by this forwarder; they need a separate file source.
-- **Recovery:** failed journal readers restart after the last emitted cursor,
-  falling back to startup history if that reader exits without making progress;
-  failed file readers replay the current file. If the forwarder itself crashes,
-  the entrypoint restarts it and replays available records since container start.
-  Replays can produce duplicates. Backpressure pauses readers instead of dropping
-  output. There is no durable delivery queue: journal/file retention and Docker's
-  logging driver still determine how much history survives outages.
-
-These behaviors use systemd's [JSON output options](https://www.freedesktop.org/software/systemd/man/latest/journalctl.html)
-and [journal fields](https://www.freedesktop.org/software/systemd/man/latest/systemd.journal-fields.html).
-
-For a readable local view while keeping the container in JSON mode:
-
-```sh
-docker logs -f unifi-os-server | jq -r '[.timestamp, .service, .level, .message] | @tsv'
-```
-
-For Vector's `docker_logs` source, decode recognized image records **before** any
-legacy text parsing. For example, use this in a remap transform and put existing
-legacy parsing in the `else` branch. This preserves Docker container metadata and
-leaves sidecar formats to their existing parsers:
-
-```text
-parsed, err = parse_json(.message)
-if err == null && is_object(parsed) && parsed.log_schema == "uos.v1" {
-  . = merge(., object!(parsed))
-  .timestamp = parse_timestamp!(string!(parsed.timestamp), "%+")
-  .parse_status = "parsed"
-} else {
-  # Existing legacy / sidecar parsing goes here.
-}
-```
-
-## Node.js security patch
-
-The image replaces Ubiquiti's `/usr/bin/node24` with the official Node.js **24.22.1** binary on amd64 and arm64 to address [Node2Shell (CVE-2026-111497)](https://nodejs.org/en/blog/release/v24.22.1/). This is the executable used by UniFi Core's systemd service. Downloads are checked against pinned SHA-256 hashes, and the build verifies the version, native addon ABI, and Brotli compression/decompression inside the extracted rootfs.
-
-This is a temporary runtime override until Ubiquiti ships a fixed package. The Debian `node24` package metadata still reports Ubiquiti's original version; check the running binary with `docker exec unifi-os-server /usr/bin/node24 --version`. An in-container package update can overwrite the patched binary, so deploy rebuilt images to retain the fix. When updating the patch, change the version and both architecture hashes together in `Dockerfile`.
+For contributors, the [build and maintenance notes](docs/building.md) cover
+supported versions, publishing, and the included Node.js security patch. The
+[editable service diagram](docs/images/services.excalidraw) can be opened in Excalidraw.
 
 ---
 
-This project is not affiliated with, endorsed by, or supported by Ubiquiti Inc. All trademarks and copyrights belong to their respective owners.
+This project is not affiliated with, endorsed by, or supported by Ubiquiti Inc.
+All trademarks and copyrights belong to their respective owners.
