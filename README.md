@@ -112,6 +112,12 @@ filtering, and log-size limits.
 
 ## Patched CVEs
 
+UniFi Network starts with `-XX:-UseBASE64Intrinsics` to mitigate
+[Java4Shell (CVE-2026-114938)](https://calif.io/java4shell/). This disables
+Java's optimized Base64 implementation while retaining normal Base64 support.
+See the [Java mitigation notes](docs/building.md#java4shell-mitigation) for
+deployment and verification.
+
 For releases that bundle Node 24, the image includes the following runtime patch
 on amd64 and arm64. Older releases retain their Node 22 application runtime.
 

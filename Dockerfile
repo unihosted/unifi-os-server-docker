@@ -113,6 +113,17 @@ chroot /rootfs /usr/bin/node24 --openssl-legacy-provider -e '
 rm -rf /build/node-patch "$ARCHIVE"
 PATCH_NODE
 
+# Temporary Java4Shell (CVE-2026-114938) mitigation for UniFi Network.
+# Patch the actual systemd command so existing UNIFI_JVM_OPTS remain intact.
+# Fail closed if a future installer changes the service's Java invocation.
+RUN /bin/bash <<'PATCH_JAVA'
+set -euo pipefail
+SERVICE=/rootfs/lib/systemd/system/unifi.service
+grep -q '^ExecStart=/usr/bin/java ' "$SERVICE"
+sed -i 's|^ExecStart=/usr/bin/java |ExecStart=/usr/bin/java -XX:-UseBASE64Intrinsics |' "$SERVICE"
+grep -q '^ExecStart=/usr/bin/java -XX:-UseBASE64Intrinsics ' "$SERVICE"
+PATCH_JAVA
+
 COPY uos-entrypoint.sh /rootfs/root/uos-entrypoint.sh
 COPY uos-logs.cjs /rootfs/root/uos-logs.cjs
 RUN chmod +x /rootfs/root/uos-entrypoint.sh
