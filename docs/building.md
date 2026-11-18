@@ -39,3 +39,23 @@ Node 22 receive Node 24 for the log forwarder while retaining their application
 runtime.
 
 This is a temporary runtime override until Ubiquiti ships a fixed package. The Debian `node24` package metadata still reports Ubiquiti's original version; check the running binary with `docker exec unifi-os-server /usr/bin/node24 --version`. An in-container package update can overwrite the patched binary, so deploy rebuilt images to retain the fix. When updating the patch, change the version and both architecture hashes together in `Dockerfile`.
+
+## Java4Shell mitigation
+
+The build adds `-XX:-UseBASE64Intrinsics` directly to UniFi Network's systemd
+`ExecStart` Java command, preserving `UNIFI_JVM_OPTS` and its heap settings.
+This mitigates [CVE-2026-114938](https://calif.io/java4shell/) by disabling the
+vulnerable optimized Base64 implementation. Normal Base64 processing remains
+available, with a possible performance cost. The flag is applied to both
+architectures; unlike `-XX:UseAVX=2`, it is not specific to x86.
+
+Deploy a rebuilt image and recreate the container to activate the mitigation;
+restarting a container using an old image does not install it. Verify the running
+UniFi Java command contains `-XX:-UseBASE64Intrinsics` and that no custom JVM
+options re-enable it with `-XX:+UseBASE64Intrinsics`.
+
+This is a workaround, not a patched Java runtime. Remove it only after verifying
+that Ubiquiti's bundled Java includes the vendor's fix. Package updates inside a
+container may replace the patched service; deploy rebuilt images instead. The
+build fails if the expected service command is absent, so installer changes
+require review rather than silently dropping the mitigation.
